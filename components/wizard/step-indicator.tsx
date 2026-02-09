@@ -17,6 +17,8 @@ const STEPS: { key: WizardStep; label: string; icon: React.ElementType }[] = [
 const STEP_ORDER: WizardStep[] = ["upload", "configure", "processing", "review", "explore"]
 
 function getStepIndex(step: WizardStep) {
+  // Dashboard is not part of the indicator; treat it as before upload
+  if (step === "dashboard") return -1
   return STEP_ORDER.indexOf(step)
 }
 

@@ -8,15 +8,18 @@ import { StepConfigure } from "@/components/wizard/step-configure"
 import { StepProcessing } from "@/components/wizard/step-processing"
 import { StepReview } from "@/components/wizard/step-review"
 import { StepExplore } from "@/components/wizard/step-explore"
+import { JobDashboard } from "@/components/wizard/job-dashboard"
 import type {
   WizardStep,
   ClusteringConfig,
   ClusteringResult,
+  SavedJob,
 } from "@/lib/clustering-types"
 import { DEFAULT_CLUSTERING_CONFIG } from "@/lib/clustering-types"
 import { ArrowLeft, ArrowRight, RotateCcw, Sparkles } from "lucide-react"
 
 const STEP_ORDER: WizardStep[] = [
+  "dashboard",
   "upload",
   "configure",
   "processing",
@@ -25,13 +28,17 @@ const STEP_ORDER: WizardStep[] = [
 ]
 
 export default function HomePage() {
-  const [currentStep, setCurrentStep] = useState<WizardStep>("upload")
+  const [currentStep, setCurrentStep] = useState<WizardStep>("dashboard")
   const [texts, setTexts] = useState<string[]>([])
-  const [config, setConfig] = useState<ClusteringConfig>({ ...DEFAULT_CLUSTERING_CONFIG })
-  const [clusteringResult, setClusteringResult] = useState<ClusteringResult | null>(null)
+  const [config, setConfig] = useState<ClusteringConfig>({
+    ...DEFAULT_CLUSTERING_CONFIG,
+  })
+  const [clusteringResult, setClusteringResult] =
+    useState<ClusteringResult | null>(null)
   const [iterationCount, setIterationCount] = useState(0)
   const [pipelineError, setPipelineError] = useState<string | null>(null)
   const [lastJobId, setLastJobId] = useState<string | null>(null)
+  const [jobName, setJobName] = useState("Analiza")
 
   const currentIndex = STEP_ORDER.indexOf(currentStep)
 
@@ -48,12 +55,41 @@ export default function HomePage() {
   }, [currentStep, currentIndex])
 
   const goBack = useCallback(() => {
+    if (currentStep === "upload") {
+      // Go back to dashboard instead of nowhere
+      setCurrentStep("dashboard")
+      return
+    }
     const prevIdx = currentIndex - 1
     if (prevIdx >= 0) {
       setCurrentStep(STEP_ORDER[prevIdx])
     }
-  }, [currentIndex])
+  }, [currentStep, currentIndex])
 
+  // Dashboard: start new analysis
+  const handleNewAnalysis = useCallback(() => {
+    setTexts([])
+    setConfig({ ...DEFAULT_CLUSTERING_CONFIG })
+    setClusteringResult(null)
+    setIterationCount(0)
+    setPipelineError(null)
+    setLastJobId(null)
+    setJobName("Analiza")
+    setCurrentStep("upload")
+  }, [])
+
+  // Dashboard: resume a completed job
+  const handleResumeJob = useCallback((job: SavedJob) => {
+    if (job.status === "completed" && job.result) {
+      setClusteringResult(job.result)
+      setLastJobId(job.jobId)
+      setConfig(job.config)
+      setJobName(job.name)
+      setCurrentStep("review")
+    }
+  }, [])
+
+  // Processing completed
   const handleProcessingComplete = useCallback(
     (result: ClusteringResult, jobId: string) => {
       setClusteringResult(result)
@@ -68,10 +104,13 @@ export default function HomePage() {
     setCurrentStep("configure")
   }, [])
 
+  const handleBackToDashboard = useCallback(() => {
+    setCurrentStep("dashboard")
+  }, [])
+
   const handleRecluster = useCallback(() => {
     setIterationCount((c) => c + 1)
     setPipelineError(null)
-    // When reclustering, enable cached embeddings from the last run
     if (lastJobId) {
       setConfig((prev) => ({
         ...prev,
@@ -83,19 +122,23 @@ export default function HomePage() {
   }, [lastJobId])
 
   const handleRestart = useCallback(() => {
-    setCurrentStep("upload")
-    setTexts([])
-    setConfig({ ...DEFAULT_CLUSTERING_CONFIG })
-    setClusteringResult(null)
-    setIterationCount(0)
-    setPipelineError(null)
-    setLastJobId(null)
+    setCurrentStep("dashboard")
+  }, [])
+
+  // When texts are loaded, derive a job name from the file
+  const handleTextsLoaded = useCallback((loaded: string[]) => {
+    setTexts(loaded)
+    if (loaded.length > 0) {
+      setJobName(`Analiza (${loaded.length} dok.)`)
+    }
   }, [])
 
   const canGoNext =
     (currentStep === "upload" && texts.length > 0) ||
     currentStep === "configure" ||
     currentStep === "review"
+
+  const showNav = !["processing", "dashboard"].includes(currentStep)
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden">
@@ -112,7 +155,11 @@ export default function HomePage() {
       {/* Header */}
       <header className="glass-subtle sticky top-0 z-30">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-8">
-          <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleBackToDashboard}
+            className="flex items-center gap-3 transition-opacity hover:opacity-80"
+          >
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/20 glow-primary">
               <Sparkles className="h-4 w-4 text-primary" />
             </div>
@@ -124,8 +171,10 @@ export default function HomePage() {
                 Automatyczne wykrywanie kategorii tematycznych
               </p>
             </div>
-          </div>
-          <StepIndicator currentStep={currentStep} />
+          </button>
+          {currentStep !== "dashboard" && (
+            <StepIndicator currentStep={currentStep} />
+          )}
         </div>
       </header>
 
@@ -137,14 +186,22 @@ export default function HomePage() {
             <p className="text-sm font-medium text-destructive">
               Blad pipeline&apos;u ML
             </p>
-            <p className="mt-1 text-xs text-destructive/80">
-              {pipelineError}
-            </p>
+            <p className="mt-1 text-xs text-destructive/80">{pipelineError}</p>
           </div>
         )}
 
+        {currentStep === "dashboard" && (
+          <JobDashboard
+            onNewAnalysis={handleNewAnalysis}
+            onResumeJob={handleResumeJob}
+          />
+        )}
+
         {currentStep === "upload" && (
-          <StepUpload onTextsLoaded={setTexts} loadedCount={texts.length} />
+          <StepUpload
+            onTextsLoaded={handleTextsLoaded}
+            loadedCount={texts.length}
+          />
         )}
 
         {currentStep === "configure" && (
@@ -161,8 +218,10 @@ export default function HomePage() {
             texts={texts}
             config={config}
             iteration={iterationCount}
+            jobName={jobName}
             onComplete={handleProcessingComplete}
             onError={handleProcessingError}
+            onBackToDashboard={handleBackToDashboard}
           />
         )}
 
@@ -182,20 +241,32 @@ export default function HomePage() {
       </main>
 
       {/* Bottom Navigation */}
-      {currentStep !== "processing" && (
+      {showNav && (
         <footer className="glass-subtle sticky bottom-0 z-30">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-8">
             <div className="flex items-center gap-2">
-              {currentIndex > 0 && currentStep !== "explore" && (
+              {currentStep === "upload" && (
                 <Button
                   variant="ghost"
                   onClick={goBack}
                   className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  Wstecz
+                  Panel
                 </Button>
               )}
+              {currentIndex > 1 &&
+                currentStep !== "explore" &&
+                currentStep !== "upload" && (
+                  <Button
+                    variant="ghost"
+                    onClick={goBack}
+                    className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Wstecz
+                  </Button>
+                )}
               {currentStep === "explore" && (
                 <Button
                   variant="ghost"
@@ -203,7 +274,7 @@ export default function HomePage() {
                   className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
                 >
                   <RotateCcw className="h-4 w-4" />
-                  Nowa analiza
+                  Panel
                 </Button>
               )}
             </div>

@@ -88,7 +88,22 @@ export interface ClusteringResult {
   jobId?: string
 }
 
-export type WizardStep = "upload" | "configure" | "processing" | "review" | "explore"
+export type WizardStep = "dashboard" | "upload" | "configure" | "processing" | "review" | "explore"
+
+/** A saved / in-progress clustering job visible in the dashboard */
+export interface SavedJob {
+  jobId: string
+  name: string
+  status: JobStatus
+  progress: number
+  textCount: number
+  topicCount: number | null
+  config: ClusteringConfig
+  createdAt: string
+  updatedAt: string
+  result: ClusteringResult | null
+  error?: string
+}
 
 export const CLUSTER_COLORS = [
   "hsl(210, 100%, 65%)",

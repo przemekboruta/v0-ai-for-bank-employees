@@ -5,22 +5,32 @@ import React from "react"
 import { useEffect, useState, useRef, useCallback } from "react"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
-import { Cpu, Sparkles, Binary, Network, AlertTriangle, RotateCcw } from "lucide-react"
-import { cn } from "@/lib/utils"
-import type { ClusteringResult, ClusteringConfig, JobStatus } from "@/lib/clustering-types"
 import {
-  submitClusteringJob,
-  submitRecluster,
-  getJobStatus,
+  Cpu,
+  Sparkles,
+  Binary,
+  Network,
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  Loader2,
+} from "lucide-react"
+import { cn } from "@/lib/utils"
+import type { ClusteringResult, ClusteringConfig, JobStatus, SavedJob } from "@/lib/clustering-types"
+import {
   runClustering,
+  saveJob,
+  updateJob as updateJobStore,
 } from "@/lib/api-client"
 
 interface StepProcessingProps {
   texts: string[]
   config: ClusteringConfig
   iteration: number
+  jobName: string
   onComplete: (result: ClusteringResult, jobId: string) => void
   onError: (message: string) => void
+  onBackToDashboard: () => void
 }
 
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -38,7 +48,7 @@ const STATUS_DETAILS: Record<JobStatus, string> = {
   embedding: "Kodowanie tekstów modelem ModernBERT-base...",
   reducing: "Rzutowanie wektorów do przestrzeni o niższej wymiarowości...",
   clustering: "Wykrywanie naturalnych skupien dokumentów...",
-  labeling: "Generowanie etykiet i sugestii usprawnień...",
+  labeling: "Generowanie etykiet i sugestii usprawnien...",
   completed: "Pipeline zakonczony pomyslnie.",
   failed: "Wystapil blad podczas przetwarzania.",
 }
@@ -49,27 +59,59 @@ const STATUS_ICONS: Record<JobStatus, React.ElementType> = {
   reducing: Network,
   clustering: Cpu,
   labeling: Sparkles,
-  completed: Sparkles,
+  completed: CheckCircle2,
   failed: AlertTriangle,
 }
 
-const STATUS_ORDER: JobStatus[] = ["queued", "embedding", "reducing", "clustering", "labeling", "completed"]
+const STATUS_ORDER: JobStatus[] = [
+  "queued",
+  "embedding",
+  "reducing",
+  "clustering",
+  "labeling",
+  "completed",
+]
 
-/** Mock pipeline -- simulates job stages locally when no backend is connected */
-function useMockPipeline(
-  texts: string[],
-  config: ClusteringConfig,
-  iteration: number,
-  onComplete: (result: ClusteringResult, jobId: string) => void,
-  onError: (message: string) => void,
-) {
+export function StepProcessing({
+  texts,
+  config,
+  iteration,
+  jobName,
+  onComplete,
+  onError,
+  onBackToDashboard,
+}: StepProcessingProps) {
   const [status, setStatus] = useState<JobStatus>("queued")
   const [progress, setProgress] = useState(0)
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [userWaiting, setUserWaiting] = useState(true)
+  const [submitted, setSubmitted] = useState(false)
   const mountedRef = useRef(true)
 
+  // Create and persist the job, then run mock pipeline
   useEffect(() => {
     mountedRef.current = true
 
+    const id = `mock-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    setJobId(id)
+
+    // Save initial job entry
+    const newJob: SavedJob = {
+      jobId: id,
+      name: jobName,
+      status: "queued",
+      progress: 0,
+      textCount: texts.length,
+      topicCount: null,
+      config,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      result: null,
+    }
+    saveJob(newJob)
+    setSubmitted(true)
+
+    // Run mock pipeline stages
     const stages: { status: JobStatus; durationMs: number }[] = [
       { status: "embedding", durationMs: config.useCachedEmbeddings ? 400 : 1800 },
       { status: "reducing", durationMs: config.dimReduction === "none" ? 200 : 1200 },
@@ -84,19 +126,21 @@ function useMockPipeline(
       for (const stage of stages) {
         if (!mountedRef.current) return
         setStatus(stage.status)
+        updateJobStore(id, { status: stage.status })
 
         const startProgress = (elapsed / totalDuration) * 100
         const endProgress = ((elapsed + stage.durationMs) / totalDuration) * 100
-        const steps = 50
+        const steps = 40
         const stepMs = stage.durationMs / steps
 
         for (let i = 0; i <= steps; i++) {
           if (!mountedRef.current) return
           await new Promise((r) => setTimeout(r, stepMs))
           const p = startProgress + ((endProgress - startProgress) * i) / steps
-          setProgress(Math.min(p, 99))
+          const rounded = Math.min(p, 99)
+          setProgress(rounded)
+          updateJobStore(id, { progress: rounded })
         }
-
         elapsed += stage.durationMs
       }
 
@@ -105,16 +149,26 @@ function useMockPipeline(
       try {
         const result = await runClustering(texts, config.granularity, iteration)
         if (!mountedRef.current) return
+
         setStatus("completed")
         setProgress(100)
-        const mockJobId = `mock-${Date.now()}`
+        updateJobStore(id, {
+          status: "completed",
+          progress: 100,
+          result,
+          topicCount: result.topics.length,
+        })
+
+        // Auto-transition if user is still waiting
         setTimeout(() => {
-          if (mountedRef.current) onComplete(result, mockJobId)
-        }, 600)
+          if (mountedRef.current) onComplete(result, id)
+        }, 800)
       } catch (err) {
         if (!mountedRef.current) return
+        const errMsg = err instanceof Error ? err.message : "Nieznany blad pipeline"
         setStatus("failed")
-        onError(err instanceof Error ? err.message : "Nieznany blad pipeline")
+        updateJobStore(id, { status: "failed", error: errMsg })
+        onError(errMsg)
       }
     }
 
@@ -126,108 +180,27 @@ function useMockPipeline(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { status, progress }
-}
-
-/** Real pipeline -- submits job and polls status from the backend */
-function useRealPipeline(
-  texts: string[],
-  config: ClusteringConfig,
-  iteration: number,
-  onComplete: (result: ClusteringResult, jobId: string) => void,
-  onError: (message: string) => void,
-) {
-  const [status, setStatus] = useState<JobStatus>("queued")
-  const [progress, setProgress] = useState(0)
-  const mountedRef = useRef(true)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  useEffect(() => {
-    mountedRef.current = true
-
-    async function startJob() {
-      try {
-        let jobId: string
-
-        if (config.useCachedEmbeddings && config.cachedJobId) {
-          const res = await submitRecluster(config.cachedJobId, config)
-          jobId = res.jobId
-        } else {
-          const res = await submitClusteringJob(texts, config, iteration)
-          jobId = res.jobId
-        }
-
-        // Poll every 1.5s
-        pollRef.current = setInterval(async () => {
-          if (!mountedRef.current) return
-
-          try {
-            const jobStatus = await getJobStatus(jobId)
-
-            setStatus(jobStatus.status)
-            setProgress(jobStatus.progress)
-
-            if (jobStatus.status === "completed" && jobStatus.result) {
-              if (pollRef.current) clearInterval(pollRef.current)
-              onComplete(jobStatus.result, jobId)
-            }
-
-            if (jobStatus.status === "failed") {
-              if (pollRef.current) clearInterval(pollRef.current)
-              onError(jobStatus.error ?? "Nieznany blad pipeline")
-            }
-          } catch {
-            // Polling error -- retry silently
-          }
-        }, 1500)
-      } catch (err) {
-        if (!mountedRef.current) return
-        setStatus("failed")
-        onError(err instanceof Error ? err.message : "Nie udalo sie zlecic zadania")
-      }
-    }
-
-    startJob()
-
-    return () => {
-      mountedRef.current = false
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  return { status, progress }
-}
-
-export function StepProcessing({
-  texts,
-  config,
-  iteration,
-  onComplete,
-  onError,
-}: StepProcessingProps) {
-  // In v0 preview (no backend) we always use mock pipeline.
-  // With a backend, the api-client functions will talk to real endpoints.
-  // We detect this by trying the real path first -- if it fails with a network
-  // error or 404 on /api/cluster/job, the mock takes over.
-  // For simplicity, we use mock pipeline always here (the proxy handles the real backend).
-  const { status, progress } = useMockPipeline(texts, config, iteration, onComplete, onError)
-
   const currentIdx = STATUS_ORDER.indexOf(status)
   const failed = status === "failed"
+  const completed = status === "completed"
 
   return (
     <div className="mx-auto flex max-w-xl flex-col items-center gap-8 py-8">
+      {/* Header */}
       <div className="flex flex-col items-center gap-2 text-center">
         <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-          {failed ? "Wystapil problem" : "Analizuje Twoje dokumenty"}
+          {completed
+            ? "Analiza zakonczona"
+            : failed
+              ? "Wystapil problem"
+              : "Analizuje Twoje dokumenty"}
         </h2>
         <p className="text-sm text-muted-foreground">
-          {failed
-            ? "Sprobuj ponownie lub zmien parametry klasteryzacji."
-            : config.useCachedEmbeddings
-              ? "Uzywam zapisanych embeddingów -- to bedzie szybsze."
-              : "Pipeline ML przetwarza dane. Nie zamykaj okna."}
+          {completed
+            ? "Wyniki sa gotowe. Za chwile przejdziesz do przegladu."
+            : failed
+              ? "Sprobuj ponownie lub zmien parametry klasteryzacji."
+              : "Mozesz wrocic do panelu i kontynuowac pozniej -- przetwarzanie jest kolejkowane w tle."}
         </p>
       </div>
 
@@ -247,7 +220,7 @@ export function StepProcessing({
           </span>
         )}
         <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-muted-foreground">
-          min {config.minClusterSize} dok./klaster
+          {texts.length} dok.
         </span>
         {config.useCachedEmbeddings && (
           <span className="rounded-full bg-accent/15 px-3 py-1 text-xs font-medium text-accent">
@@ -274,7 +247,7 @@ export function StepProcessing({
           const isDone = currentIdx > idx
           const isFuture = currentIdx < idx
 
-          // Skip embedding stage visually if using cache
+          // Cached embedding -- show as skipped
           if (stageStatus === "embedding" && config.useCachedEmbeddings && isDone) {
             return (
               <div
@@ -295,7 +268,7 @@ export function StepProcessing({
             )
           }
 
-          // Skip dim reduction if "none"
+          // No dim reduction -- show as skipped
           if (stageStatus === "reducing" && config.dimReduction === "none" && isDone) {
             return (
               <div
@@ -346,9 +319,7 @@ export function StepProcessing({
                 </p>
                 <p className="text-xs text-muted-foreground">{STATUS_DETAILS[stageStatus]}</p>
               </div>
-              {isDone && (
-                <span className="text-xs font-medium text-accent">Gotowe</span>
-              )}
+              {isDone && <span className="text-xs font-medium text-accent">Gotowe</span>}
             </div>
           )
         })}
@@ -361,6 +332,30 @@ export function StepProcessing({
           <p className="text-center text-sm text-destructive">
             Przetwarzanie nie powiodlo sie. Sprobuj zmienic parametry i uruchom ponownie.
           </p>
+        </div>
+      )}
+
+      {/* Action bar: go back to dashboard (non-blocking) */}
+      {!completed && !failed && submitted && (
+        <div className="glass w-full rounded-2xl p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <p className="text-sm font-medium text-foreground">
+                Nie musisz czekac
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Wroc do panelu -- zlecenie bedzie kontynuowane w tle. Wyniki beda dostepne w liscie analiz.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={onBackToDashboard}
+              className="shrink-0 gap-2 border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Panel
+            </Button>
+          </div>
         </div>
       )}
     </div>
