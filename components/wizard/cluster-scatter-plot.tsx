@@ -3,20 +3,24 @@
 import React from "react"
 
 import { useCallback, useMemo, useRef, useState } from "react"
-import type { ClusteringResult, ClusterTopic, DocumentItem } from "@/lib/clustering-types"
+import type {
+  ClusteringResult,
+  ClusterTopic,
+  DocumentItem,
+} from "@/lib/clustering-types"
 
 interface ClusterScatterPlotProps {
   result: ClusteringResult
   selectedTopicId: number | null
   onTopicSelect: (id: number | null) => void
-  onDocumentHover: (doc: DocumentItem | null) => void
+  onDocumentClick: (doc: DocumentItem) => void
 }
 
 export function ClusterScatterPlot({
   result,
   selectedTopicId,
   onTopicSelect,
-  onDocumentHover,
+  onDocumentClick,
 }: ClusterScatterPlotProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [hoveredDoc, setHoveredDoc] = useState<DocumentItem | null>(null)
@@ -54,7 +58,6 @@ export function ClusterScatterPlot({
   const handleDocMouseEnter = useCallback(
     (doc: DocumentItem, e: React.MouseEvent) => {
       setHoveredDoc(doc)
-      onDocumentHover(doc)
       const svg = svgRef.current
       if (svg) {
         const rect = svg.getBoundingClientRect()
@@ -64,13 +67,12 @@ export function ClusterScatterPlot({
         })
       }
     },
-    [onDocumentHover]
+    []
   )
 
   const handleDocMouseLeave = useCallback(() => {
     setHoveredDoc(null)
-    onDocumentHover(null)
-  }, [onDocumentHover])
+  }, [])
 
   const handleBgClick = useCallback(() => {
     onTopicSelect(null)
@@ -78,7 +80,6 @@ export function ClusterScatterPlot({
 
   return (
     <div className="glass relative w-full overflow-hidden rounded-2xl">
-      {/* Defs for glow effects */}
       <svg
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
@@ -98,7 +99,6 @@ export function ClusterScatterPlot({
           </filter>
         </defs>
 
-        {/* Background */}
         <rect
           x="0"
           y="0"
@@ -108,7 +108,7 @@ export function ClusterScatterPlot({
           rx="16"
         />
 
-        {/* Subtle grid */}
+        {/* Grid */}
         {Array.from({ length: 6 }).map((_, i) => {
           const xPos = padding + ((width - 2 * padding) / 5) * i
           const yPos = padding + ((height - 2 * padding) / 5) * i
@@ -141,7 +141,8 @@ export function ClusterScatterPlot({
           const cx = scaleX(topic.centroidX)
           const cy = scaleY(topic.centroidY)
           const isSelected = selectedTopicId === topic.id
-          const isOther = selectedTopicId !== null && selectedTopicId !== topic.id
+          const isOther =
+            selectedTopicId !== null && selectedTopicId !== topic.id
 
           return (
             <g key={`area-${topic.id}`}>
@@ -178,14 +179,12 @@ export function ClusterScatterPlot({
           if (!topic) return null
           const cx = scaleX(doc.x)
           const cy = scaleY(doc.y)
-          const isSelected = selectedTopicId === doc.clusterId
           const isOther =
             selectedTopicId !== null && selectedTopicId !== doc.clusterId
           const isHovered = hoveredDoc?.id === doc.id
 
           return (
             <g key={doc.id}>
-              {/* Glow behind hovered dot */}
               {isHovered && (
                 <circle
                   cx={cx}
@@ -210,9 +209,7 @@ export function ClusterScatterPlot({
                 onMouseLeave={handleDocMouseLeave}
                 onClick={(e) => {
                   e.stopPropagation()
-                  onTopicSelect(
-                    selectedTopicId === doc.clusterId ? null : doc.clusterId
-                  )
+                  onDocumentClick(doc)
                 }}
               />
             </g>
@@ -235,9 +232,17 @@ export function ClusterScatterPlot({
               ? `${hoveredDoc.text.substring(0, 120)}...`
               : hoveredDoc.text}
           </p>
-          <p className="mt-1.5 text-[10px] font-semibold" style={{ color: topicMap.get(hoveredDoc.clusterId)?.color }}>
-            {topicMap.get(hoveredDoc.clusterId)?.label}
-          </p>
+          <div className="mt-1.5 flex items-center justify-between">
+            <p
+              className="text-[10px] font-semibold"
+              style={{ color: topicMap.get(hoveredDoc.clusterId)?.color }}
+            >
+              {topicMap.get(hoveredDoc.clusterId)?.label}
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Kliknij, aby otworzyc
+            </p>
+          </div>
         </div>
       )}
     </div>

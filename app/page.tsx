@@ -138,7 +138,7 @@ export default function HomePage() {
         )}
 
         {currentStep === "explore" && clusteringResult && (
-          <StepExplore result={clusteringResult} />
+          <StepExplore result={clusteringResult} onResultUpdate={setClusteringResult} />
         )}
       </main>
 
