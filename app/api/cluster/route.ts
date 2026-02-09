@@ -1,21 +1,44 @@
 import { NextResponse } from "next/server"
 import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 import { generateMockClustering } from "@/lib/mock-clustering"
-import type { Granularity } from "@/lib/clustering-types"
+import type { ClusteringConfig, Granularity } from "@/lib/clustering-types"
 
 /**
  * POST /api/cluster
  *
- * Glowna klasteryzacja.
- * - PYTHON_BACKEND_URL ustawiony -> proxy do FastAPI (prawdziwy pipeline ML)
- * - brak -> mock pipeline (demo)
+ * Submit clustering job.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI (real job queue + Redis)
+ * - brak -> mock: zwraca natychmiast symulowany wynik w formacie jobId
  */
+
+// In-memory mock job store (for demo/preview only)
+const mockJobs = new Map<string, {
+  status: string
+  progress: number
+  result: ReturnType<typeof generateMockClustering> | null
+  config: ClusteringConfig | { granularity: Granularity }
+  textCount: number
+  createdAt: string
+  error?: string
+}>()
+
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { texts, granularity, iteration = 0 } = body as {
+
+    // === PRODUCTION: proxy to Python backend ===
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+    }
+
+    // === MOCK MODE ===
+    const { texts, config, granularity, iteration = 0 } = body as {
       texts: string[]
-      granularity: Granularity
+      config?: ClusteringConfig
+      granularity?: Granularity
       iteration?: number
     }
 
@@ -25,48 +48,41 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
-    if (texts.length > 50000) {
-      return NextResponse.json(
-        { error: { code: "TOO_MANY_TEXTS", message: `Maksymalnie 50000 tekstow. Otrzymano: ${texts.length}.` } },
-        { status: 413 }
-      )
-    }
-    if (!["low", "medium", "high"].includes(granularity)) {
-      return NextResponse.json(
-        { error: { code: "INVALID_GRANULARITY", message: "Granularity musi byc: low, medium lub high." } },
-        { status: 400 }
-      )
-    }
 
-    // === PRODUCTION: proxy do Python backend ===
-    if (isPythonBackendEnabled()) {
-      return proxyToBackend("/api/cluster", {
-        method: "POST",
-        body: JSON.stringify({ texts, granularity, iteration }),
-      })
-    }
+    const effectiveGranularity = config?.granularity ?? granularity ?? "medium"
 
-    // === MOCK ===
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    const pipelineStart = Date.now()
-    const result = generateMockClustering(texts, granularity, 42 + iteration)
-    const pipelineDuration = Date.now() - pipelineStart
+    // Generate mock result immediately but store it as a "job"
+    const jobId = `mock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const result = generateMockClustering(texts, effectiveGranularity, 42 + iteration)
 
-    const hdbscanConfigs = {
-      low: { min_cluster_size: 50, min_samples: 15, cluster_selection_epsilon: 0.5 },
-      medium: { min_cluster_size: 20, min_samples: 8, cluster_selection_epsilon: 0.3 },
-      high: { min_cluster_size: 8, min_samples: 3, cluster_selection_epsilon: 0.1 },
-    }
+    mockJobs.set(jobId, {
+      status: "completed",
+      progress: 100,
+      result,
+      config: config ?? { granularity: effectiveGranularity },
+      textCount: texts.length,
+      createdAt: new Date().toISOString(),
+    })
 
+    // Return in legacy format for backward compatibility with runClustering()
+    // AND in job format for submitClusteringJob()
     return NextResponse.json({
+      // Job fields
+      jobId,
+      status: "queued",
+      // Legacy fields
       ...result,
       meta: {
-        pipelineDurationMs: pipelineDuration + 200,
+        pipelineDurationMs: 200,
         encoderModel: "mock-encoder-v1",
         umapParams: { n_neighbors: 15, min_dist: 0.1, n_components: 2 },
-        hdbscanParams: hdbscanConfigs[granularity],
+        hdbscanParams: { min_cluster_size: config?.minClusterSize ?? 20 },
         llmModel: "mock-llm",
         iteration,
+        algorithm: config?.algorithm ?? "hdbscan",
+        dimReduction: config?.dimReduction ?? "umap",
+        dimReductionTarget: config?.dimReductionTarget ?? 50,
+        usedCachedEmbeddings: config?.useCachedEmbeddings ?? false,
       },
     })
   } catch (error) {
@@ -77,3 +93,6 @@ export async function POST(request: Request) {
     )
   }
 }
+
+// Export the mock store for the job status route
+export { mockJobs }

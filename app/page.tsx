@@ -10,10 +10,10 @@ import { StepReview } from "@/components/wizard/step-review"
 import { StepExplore } from "@/components/wizard/step-explore"
 import type {
   WizardStep,
-  Granularity,
+  ClusteringConfig,
   ClusteringResult,
 } from "@/lib/clustering-types"
-import { runClustering } from "@/lib/api-client"
+import { DEFAULT_CLUSTERING_CONFIG } from "@/lib/clustering-types"
 import { ArrowLeft, ArrowRight, RotateCcw, Sparkles } from "lucide-react"
 
 const STEP_ORDER: WizardStep[] = [
@@ -27,16 +27,17 @@ const STEP_ORDER: WizardStep[] = [
 export default function HomePage() {
   const [currentStep, setCurrentStep] = useState<WizardStep>("upload")
   const [texts, setTexts] = useState<string[]>([])
-  const [granularity, setGranularity] = useState<Granularity>("medium")
-  const [clusteringResult, setClusteringResult] =
-    useState<ClusteringResult | null>(null)
+  const [config, setConfig] = useState<ClusteringConfig>({ ...DEFAULT_CLUSTERING_CONFIG })
+  const [clusteringResult, setClusteringResult] = useState<ClusteringResult | null>(null)
   const [iterationCount, setIterationCount] = useState(0)
   const [pipelineError, setPipelineError] = useState<string | null>(null)
+  const [lastJobId, setLastJobId] = useState<string | null>(null)
 
   const currentIndex = STEP_ORDER.indexOf(currentStep)
 
   const goNext = useCallback(() => {
     if (currentStep === "configure") {
+      setPipelineError(null)
       setCurrentStep("processing")
       return
     }
@@ -53,33 +54,42 @@ export default function HomePage() {
     }
   }, [currentIndex])
 
-  const handleProcessingComplete = useCallback(async () => {
-    try {
-      setPipelineError(null)
-      const result = await runClustering(texts, granularity, iterationCount)
+  const handleProcessingComplete = useCallback(
+    (result: ClusteringResult, jobId: string) => {
       setClusteringResult(result)
+      setLastJobId(jobId)
       setCurrentStep("review")
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Nieznany blad pipeline'u"
-      setPipelineError(message)
-      setCurrentStep("configure")
-    }
-  }, [texts, granularity, iterationCount])
+    },
+    []
+  )
+
+  const handleProcessingError = useCallback((message: string) => {
+    setPipelineError(message)
+    setCurrentStep("configure")
+  }, [])
 
   const handleRecluster = useCallback(() => {
     setIterationCount((c) => c + 1)
     setPipelineError(null)
-    setCurrentStep("processing")
-  }, [])
+    // When reclustering, enable cached embeddings from the last run
+    if (lastJobId) {
+      setConfig((prev) => ({
+        ...prev,
+        useCachedEmbeddings: true,
+        cachedJobId: lastJobId,
+      }))
+    }
+    setCurrentStep("configure")
+  }, [lastJobId])
 
   const handleRestart = useCallback(() => {
     setCurrentStep("upload")
     setTexts([])
-    setGranularity("medium")
+    setConfig({ ...DEFAULT_CLUSTERING_CONFIG })
     setClusteringResult(null)
     setIterationCount(0)
     setPipelineError(null)
+    setLastJobId(null)
   }, [])
 
   const canGoNext =
@@ -139,14 +149,21 @@ export default function HomePage() {
 
         {currentStep === "configure" && (
           <StepConfigure
-            granularity={granularity}
-            onGranularityChange={setGranularity}
+            config={config}
+            onConfigChange={setConfig}
             textCount={texts.length}
+            lastJobId={lastJobId}
           />
         )}
 
         {currentStep === "processing" && (
-          <StepProcessing onComplete={handleProcessingComplete} />
+          <StepProcessing
+            texts={texts}
+            config={config}
+            iteration={iterationCount}
+            onComplete={handleProcessingComplete}
+            onError={handleProcessingError}
+          />
         )}
 
         {currentStep === "review" && clusteringResult && (

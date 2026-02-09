@@ -9,7 +9,6 @@ import type {
   ClusteringAlgorithm,
   DimReductionMethod,
 } from "@/lib/clustering-types"
-import { DEFAULT_CLUSTERING_CONFIG } from "@/lib/clustering-types"
 import {
   Layers,
   LayoutGrid,
