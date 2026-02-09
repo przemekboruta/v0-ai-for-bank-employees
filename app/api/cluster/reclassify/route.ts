@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 import type {
   ClusterTopic,
   DocumentItem,
@@ -9,8 +10,8 @@ import type {
  * POST /api/cluster/reclassify
  *
  * Przenosi dokumenty miedzy klastrami.
- * W trybie MOCK: po prostu zmienia clusterId.
- * W trybie PRODUCTION: moze przeliczac koherencje, centroidy, keywords.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI
+ * - brak -> lokalne przesuniecie
  */
 export async function POST(request: Request) {
   try {
@@ -21,6 +22,13 @@ export async function POST(request: Request) {
       toClusterId: number
       documents: DocumentItem[]
       topics: ClusterTopic[]
+    }
+
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster/reclassify", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     }
 
     if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {

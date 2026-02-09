@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 import type {
   ClusterTopic,
   DocumentItem,
@@ -9,9 +10,9 @@ import { CLUSTER_COLORS } from "@/lib/clustering-types"
 /**
  * POST /api/cluster/merge
  *
- * Laczy 2+ klastrow w jeden. Przelicza centroid, koherencje, dokumenty.
- * W trybie MOCK: operuje na danych in-memory.
- * W trybie PRODUCTION: moze wywolac LLM dla nowego opisu polaczonego klastra.
+ * Laczy 2+ klastrow w jeden.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI
+ * - brak -> logika in-memory
  */
 export async function POST(request: Request) {
   try {
@@ -21,6 +22,13 @@ export async function POST(request: Request) {
       newLabel?: string
       documents: DocumentItem[]
       topics: ClusterTopic[]
+    }
+
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster/merge", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     }
 
     if (!clusterIds || !Array.isArray(clusterIds) || clusterIds.length < 2) {

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 
 /**
  * PATCH /api/cluster/rename
  *
- * Zmiana nazwy topiku. Operacja czysto lokalna -- nie wymaga ML pipeline.
- * W produkcji moze logowac zmiane do audit logu.
+ * Zmiana nazwy topiku.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI (audit log)
+ * - brak -> lokalna odpowiedz
  */
 export async function PATCH(request: Request) {
   try {
@@ -12,6 +14,13 @@ export async function PATCH(request: Request) {
     const { topicId, newLabel } = body as {
       topicId: number
       newLabel: string
+    }
+
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster/rename", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      })
     }
 
     if (topicId === undefined || topicId === null) {

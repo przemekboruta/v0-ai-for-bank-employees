@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 import type { ClusteringResult } from "@/lib/clustering-types"
 
 /**
  * POST /api/cluster/export
  *
- * Generuje raport z wynikow klasteryzacji w wybranym formacie.
- * Formaty: text, csv, json
+ * Generuje raport w formacie text, CSV lub JSON.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI
+ * - brak -> generowanie lokalne
  */
 export async function POST(request: Request) {
   try {
@@ -22,6 +24,13 @@ export async function POST(request: Request) {
       language?: "pl" | "en"
       includeExamples?: boolean
       includeLLMInsights?: boolean
+    }
+
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster/export", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     }
 
     if (!result || !result.topics || !result.documents) {

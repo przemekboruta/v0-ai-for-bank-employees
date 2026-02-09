@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 import type {
   ClusterTopic,
   DocumentItem,
@@ -9,10 +10,8 @@ import type {
  * POST /api/cluster/refine
  *
  * LLM Refinement -- analizuje istniejace klastry i generuje nowe sugestie ulepszen.
- * Nie zmienia klastrow -- zwraca tylko sugestie do zatwierdzenia przez uzytkownika.
- *
- * W trybie MOCK: generuje hardcodowane sugestie.
- * W trybie PRODUCTION: wysyla probki do LLM i prosi o analize.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI (prawdziwy OpenAI)
+ * - brak -> mock sugestie
  */
 export async function POST(request: Request) {
   try {
@@ -27,6 +26,14 @@ export async function POST(request: Request) {
       documents: DocumentItem[]
       previousSuggestions?: LLMSuggestion[]
       focusAreas?: string[]
+    }
+
+    // === PRODUCTION: proxy ===
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster/refine", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     }
 
     if (!topics || !Array.isArray(topics) || topics.length === 0) {

@@ -788,28 +788,99 @@ Uzytkownik    Frontend      API Gateway    Encoder    UMAP/HDBSCAN    LLM
 
 ---
 
-## Struktura plikow backendu (mockowego w Next.js)
+## Struktura plikow
+
+### Next.js API (proxy/mock)
 
 ```
-app/
-  api/
-    health/
-      route.ts              GET  -- healthcheck
-    cluster/
-      route.ts              POST -- glowna klasteryzacja
-      refine/
-        route.ts            POST -- LLM refinement
-      rename/
-        route.ts            PATCH -- zmiana nazwy
-      merge/
-        route.ts            POST -- laczenie klastrow
-      split/
-        route.ts            POST -- dzielenie klastra
-      reclassify/
-        route.ts            POST -- reklasyfikacja dokumentow
-      export/
-        route.ts            POST -- generowanie raportu
+app/api/
+  health/route.ts              GET  -- healthcheck
+  cluster/
+    route.ts                   POST -- glowna klasteryzacja
+    refine/route.ts            POST -- LLM refinement
+    rename/route.ts            PATCH -- zmiana nazwy
+    merge/route.ts             POST -- laczenie klastrow
+    split/route.ts             POST -- dzielenie klastra
+    reclassify/route.ts        POST -- reklasyfikacja dokumentow
+    export/route.ts            POST -- generowanie raportu
 lib/
-  clustering-types.ts       -- typy danych
-  mock-clustering.ts        -- mockowe generowanie wynikow
+  clustering-types.ts          -- typy danych (zrodlo prawdy)
+  mock-clustering.ts           -- mockowe generowanie wynikow
+  api-client.ts                -- klient API dla frontendu
+  backend-proxy.ts             -- proxy do Python backend
 ```
+
+### Python Backend (FastAPI)
+
+```
+backend/
+  main.py                      -- FastAPI app, lifespan, CORS
+  config.py                    -- konfiguracja (env vars, HDBSCAN params)
+  schemas.py                   -- Pydantic modele (zsynchronizowane z TS types)
+  requirements.txt             -- Python dependencies
+  Dockerfile                   -- konteneryzacja
+  run.sh                       -- skrypt startowy z venv
+  .env.example                 -- szablon zmiennych srodowiskowych
+  services/
+    __init__.py
+    encoder.py                 -- ModernBERT-base: tokenizacja + mean pooling
+    clustering.py              -- UMAP + HDBSCAN + Silhouette + c-TF-IDF
+    llm.py                     -- OpenAI: labeling + refinement (async, retry, fallback)
+    pipeline.py                -- orkiestrator: encoder -> cluster -> llm
+  routers/
+    __init__.py
+    cluster.py                 -- POST /cluster, /refine, /merge, /split, /reclassify, PATCH /rename
+    export.py                  -- POST /cluster/export (CSV BOM, JSON, text)
+    health.py                  -- GET /health (status kazdego komponentu)
+```
+
+---
+
+## Uruchamianie
+
+### Tryb 1: Tylko frontend (mock / demo)
+
+```bash
+npm run dev
+# Frontend: http://localhost:3000
+# Wszystkie endpointy zwracaja mockowe dane
+```
+
+### Tryb 2: Frontend + Python backend (produkcja)
+
+```bash
+# Terminal 1 -- backend
+cd backend
+chmod +x run.sh
+./run.sh
+# API: http://localhost:8000, Docs: http://localhost:8000/docs
+
+# Terminal 2 -- frontend
+PYTHON_BACKEND_URL=http://localhost:8000 npm run dev
+# Frontend: http://localhost:3000 -- proxy do backendu
+```
+
+### Tryb 3: Docker Compose
+
+```bash
+# Ustaw OPENAI_API_KEY w .env lub eksportuj
+export OPENAI_API_KEY=sk-...
+docker compose up --build
+# Frontend: http://localhost:3000, Backend: http://localhost:8000
+```
+
+---
+
+## Przelaczanie trybow
+
+Zmienna `PYTHON_BACKEND_URL` steruje trybem:
+
+| Zmienna                | Tryb        | Opis                                           |
+|------------------------|-------------|-------------------------------------------------|
+| (nie ustawiona)        | MOCK        | Next.js API Routes zwracaja symulowane dane     |
+| `http://localhost:8000`| PRODUCTION  | Next.js proxyuje requesty do Python FastAPI     |
+
+Kazdy Next.js API route sprawdza `isPythonBackendEnabled()` i albo proxyuje
+caly request do backendu Python, albo wykonuje lokalna logike mockowa.
+Frontend (`lib/api-client.ts`) zawsze komunikuje sie z Next.js -- nie wie
+o istnieniu backendu Python.

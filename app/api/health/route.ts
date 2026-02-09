@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 
 /**
  * GET /api/health
  *
- * Healthcheck -- sprawdza dostepnosc wszystkich komponentow pipeline'u.
- * W trybie MOCK: wszystko "up" z symulowanymi latency.
- * W trybie PRODUCTION: ping do kazdego serwisu.
+ * Healthcheck.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI (rzeczywisty status)
+ * - brak -> symulowany "up"
  */
 export async function GET() {
+  if (isPythonBackendEnabled()) {
+    return proxyToBackend("/api/health", { method: "GET" })
+  }
   const now = new Date().toISOString()
 
   // PRODUCTION:

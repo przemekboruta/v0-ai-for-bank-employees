@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { isPythonBackendEnabled, proxyToBackend } from "@/lib/backend-proxy"
 import type {
   ClusterTopic,
   DocumentItem,
@@ -10,8 +11,8 @@ import { CLUSTER_COLORS } from "@/lib/clustering-types"
  * POST /api/cluster/split
  *
  * Dzieli klaster na 2+ podklastrow.
- * W trybie MOCK: dzieli losowo na podstawie pozycji 2D (mediana X).
- * W trybie PRODUCTION: uruchamia mini-HDBSCAN na podzbiorze embeddingów.
+ * - PYTHON_BACKEND_URL -> proxy do FastAPI (KMeans na embeddingach)
+ * - brak -> podzial po medianie X
  */
 export async function POST(request: Request) {
   try {
@@ -21,6 +22,13 @@ export async function POST(request: Request) {
       numSubclusters?: number
       documents: DocumentItem[]
       topics: ClusterTopic[]
+    }
+
+    if (isPythonBackendEnabled()) {
+      return proxyToBackend("/api/cluster/split", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     }
 
     if (clusterId === undefined || clusterId === null) {
