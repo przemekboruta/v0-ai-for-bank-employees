@@ -24,3 +24,6 @@ openai>=1.50.0
 # === Utilities ===
 pydantic>=2.6.0
 python-dotenv>=1.0.0
+
+# Redis (async)
+redis[hiredis]>=5.0.0

@@ -1,6 +1,7 @@
 """
-Clustering Service - UMAP + HDBSCAN + Silhouette + Keywords
-Caly pipeline od embeddingów do gotowych klastrow (bez LLM labeling).
+Clustering Service - multi-algorithm support
+Supports: HDBSCAN, KMeans, Agglomerative
+Dim reduction: UMAP, PCA, t-SNE, or none
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ import time
 import numpy as np
 import hdbscan
 import umap
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_samples
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -25,35 +29,72 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+# Mapping from granularity to default number of clusters (for KMeans/Agglomerative)
+GRANULARITY_K_MAP = {"low": 4, "medium": 7, "high": 12}
+
 
 class ClusteringService:
     """
-    Serwis klasteryzacji: UMAP -> HDBSCAN -> Silhouette -> c-TF-IDF
+    Multi-algorithm clustering with configurable dimensionality reduction.
     """
 
-    def reduce_dimensions(
+    # ---- Dimensionality reduction ----
+
+    def reduce_for_clustering(
+        self,
+        embeddings: np.ndarray,
+        method: str = "umap",
+        target_dims: int = 50,
+        seed: int = 42,
+    ) -> np.ndarray:
+        """
+        Reduce dims BEFORE clustering (for better cluster quality).
+        This is separate from the 2D reduction for visualization.
+        """
+        if method == "none" or target_dims >= embeddings.shape[1]:
+            logger.info(f"Dim reduction skipped (method={method}, dims={embeddings.shape[1]})")
+            return embeddings
+
+        logger.info(f"Pre-clustering reduction: {embeddings.shape[1]}D -> {target_dims}D via {method}")
+        start = time.time()
+
+        if method == "pca":
+            reducer = PCA(n_components=target_dims, random_state=seed)
+            result = reducer.fit_transform(embeddings)
+        elif method == "tsne":
+            # t-SNE is slow for high dims, use PCA first if > 50
+            if embeddings.shape[1] > 50:
+                pca = PCA(n_components=min(50, target_dims), random_state=seed)
+                embeddings = pca.fit_transform(embeddings)
+            reducer = TSNE(n_components=min(target_dims, 3), random_state=seed, perplexity=30)
+            result = reducer.fit_transform(embeddings)
+        else:  # umap
+            reducer = umap.UMAP(
+                n_neighbors=min(UMAP_N_NEIGHBORS, len(embeddings) - 1),
+                min_dist=UMAP_MIN_DIST,
+                n_components=target_dims,
+                metric=UMAP_METRIC,
+                random_state=seed,
+            )
+            result = reducer.fit_transform(embeddings)
+
+        logger.info(f"Pre-clustering reduction done in {time.time() - start:.1f}s")
+        return result
+
+    def reduce_to_2d(
         self,
         embeddings: np.ndarray,
         seed: int = 42,
     ) -> np.ndarray:
         """
-        Redukuje wymiary embeddingów do 2D za pomoca UMAP.
-
-        Args:
-            embeddings: Macierz embeddingów (N, D)
-            seed: Ziarno losowe
-
-        Returns:
-            Wspolrzedne 2D (N, 2)
+        Always reduce to 2D for scatter plot visualization (always UMAP).
         """
-        logger.info(
-            f"UMAP: redukcja {embeddings.shape} -> 2D "
-            f"(n_neighbors={UMAP_N_NEIGHBORS}, min_dist={UMAP_MIN_DIST})"
-        )
+        logger.info(f"Viz reduction: {embeddings.shape[1]}D -> 2D via UMAP")
         start = time.time()
 
+        n_neighbors = min(UMAP_N_NEIGHBORS, len(embeddings) - 1)
         reducer = umap.UMAP(
-            n_neighbors=UMAP_N_NEIGHBORS,
+            n_neighbors=n_neighbors,
             min_dist=UMAP_MIN_DIST,
             n_components=2,
             metric=UMAP_METRIC,
@@ -61,233 +102,175 @@ class ClusteringService:
         )
         coords_2d = reducer.fit_transform(embeddings)
 
-        elapsed = time.time() - start
-        logger.info(f"UMAP zakonczony w {elapsed:.1f}s")
+        logger.info(f"Viz reduction done in {time.time() - start:.1f}s")
         return coords_2d
+
+    # ---- Clustering algorithms ----
 
     def cluster(
         self,
         embeddings: np.ndarray,
-        granularity: str,
+        algorithm: str = "hdbscan",
+        granularity: str = "medium",
+        num_clusters: int | None = None,
+        min_cluster_size: int = 5,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Klasteryzacja HDBSCAN na embeddingach.
-
-        Args:
-            embeddings: Macierz embeddingów (N, D)
-            granularity: "low", "medium" lub "high"
+        Run clustering with selected algorithm.
 
         Returns:
-            (labels, probabilities) - przypisania klastrow i prawdopodobienstwa
+            (labels, probabilities)
         """
-        params = GRANULARITY_CONFIG[granularity]
-        logger.info(f"HDBSCAN: granularity={granularity}, params={params}")
+        logger.info(
+            f"Clustering: algorithm={algorithm}, granularity={granularity}, "
+            f"num_clusters={num_clusters}, min_cluster_size={min_cluster_size}"
+        )
         start = time.time()
 
-        clusterer = hdbscan.HDBSCAN(
-            min_cluster_size=params["min_cluster_size"],
-            min_samples=params["min_samples"],
-            cluster_selection_epsilon=params["cluster_selection_epsilon"],
-            metric="euclidean",
-            prediction_data=True,
-        )
-        labels = clusterer.fit_predict(embeddings)
-        probabilities = clusterer.probabilities_
+        if algorithm == "kmeans":
+            k = num_clusters or GRANULARITY_K_MAP[granularity]
+            k = min(k, len(embeddings) - 1)
+            model = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = model.fit_predict(embeddings)
+            # KMeans doesn't have probabilities -- use distance-based confidence
+            distances = model.transform(embeddings)
+            min_dist = distances.min(axis=1)
+            max_d = min_dist.max() if min_dist.max() > 0 else 1.0
+            probabilities = 1.0 - (min_dist / max_d)
 
-        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        noise_count = int((labels == -1).sum())
-        elapsed = time.time() - start
+        elif algorithm == "agglomerative":
+            k = num_clusters or GRANULARITY_K_MAP[granularity]
+            k = min(k, len(embeddings) - 1)
+            model = AgglomerativeClustering(n_clusters=k)
+            labels = model.fit_predict(embeddings)
+            probabilities = np.ones(len(labels))  # no native probs
 
-        logger.info(
-            f"HDBSCAN: {n_clusters} klastrow, {noise_count} szum, "
-            f"zakonczony w {elapsed:.1f}s"
-        )
+        else:  # hdbscan
+            params = GRANULARITY_CONFIG.get(granularity, GRANULARITY_CONFIG["medium"]).copy()
+            params["min_cluster_size"] = max(min_cluster_size, params["min_cluster_size"])
 
-        # Fallback: jesli 0 klastrow, zmniejsz min_cluster_size
-        if n_clusters == 0:
-            logger.warning("HDBSCAN: 0 klastrow, retry z mniejszymi parametrami")
-            fallback_params = {
-                "min_cluster_size": max(5, params["min_cluster_size"] // 2),
-                "min_samples": max(2, params["min_samples"] // 2),
-                "cluster_selection_epsilon": params["cluster_selection_epsilon"] / 2,
-            }
-            clusterer2 = hdbscan.HDBSCAN(
-                **fallback_params,
+            clusterer = hdbscan.HDBSCAN(
+                min_cluster_size=params["min_cluster_size"],
+                min_samples=params["min_samples"],
+                cluster_selection_epsilon=params["cluster_selection_epsilon"],
                 metric="euclidean",
                 prediction_data=True,
             )
-            labels = clusterer2.fit_predict(embeddings)
-            probabilities = clusterer2.probabilities_
+            labels = clusterer.fit_predict(embeddings)
+            probabilities = clusterer.probabilities_
 
             n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-            logger.info(f"HDBSCAN fallback: {n_clusters} klastrow")
+
+            # Fallback if no clusters found
+            if n_clusters == 0:
+                logger.warning("HDBSCAN: 0 clusters, retrying with smaller params")
+                fallback = {
+                    "min_cluster_size": max(3, params["min_cluster_size"] // 3),
+                    "min_samples": max(2, params["min_samples"] // 3),
+                    "cluster_selection_epsilon": params["cluster_selection_epsilon"] / 3,
+                }
+                c2 = hdbscan.HDBSCAN(**fallback, metric="euclidean", prediction_data=True)
+                labels = c2.fit_predict(embeddings)
+                probabilities = c2.probabilities_
+
+        n_found = len(set(labels)) - (1 if -1 in labels else 0)
+        noise = int((labels == -1).sum())
+        elapsed = time.time() - start
+        logger.info(f"Clustering done: {n_found} clusters, {noise} noise, {elapsed:.1f}s")
 
         return labels, probabilities
 
-    def compute_coherence(
-        self,
-        embeddings: np.ndarray,
-        labels: np.ndarray,
-    ) -> dict[int, float]:
-        """
-        Oblicza silhouette score per klaster.
+    # ---- Analysis ----
 
-        Returns:
-            Dict {cluster_id: coherence_score (0-1)}
-        """
+    def compute_coherence(
+        self, embeddings: np.ndarray, labels: np.ndarray,
+    ) -> dict[int, float]:
         mask = labels != -1
         if mask.sum() < 2:
             return {}
-
         unique_labels = set(labels[mask])
         if len(unique_labels) < 2:
             return {lbl: 0.75 for lbl in unique_labels}
-
         try:
-            scores = silhouette_samples(
-                embeddings[mask], labels[mask], metric="cosine"
-            )
+            scores = silhouette_samples(embeddings[mask], labels[mask], metric="cosine")
         except Exception as e:
             logger.warning(f"Silhouette error: {e}")
             return {lbl: 0.5 for lbl in unique_labels}
 
         coherence: dict[int, float] = {}
         label_array = labels[mask]
-        for cluster_id in unique_labels:
-            cluster_mask = label_array == cluster_id
-            raw_score = float(scores[cluster_mask].mean())
-            # Normalizuj z zakresu [-1, 1] do [0, 1]
-            coherence[cluster_id] = max(0.0, min(1.0, (raw_score + 1.0) / 2.0))
-
+        for cid in unique_labels:
+            cmask = label_array == cid
+            raw = float(scores[cmask].mean())
+            coherence[cid] = max(0.0, min(1.0, (raw + 1.0) / 2.0))
         return coherence
 
-    def extract_keywords(
-        self,
-        texts_in_cluster: list[str],
-        n: int = 7,
-    ) -> list[str]:
-        """
-        Wyciaga slowa kluczowe z tekstow klastra za pomoca TF-IDF.
-        """
+    def extract_keywords(self, texts_in_cluster: list[str], n: int = 7) -> list[str]:
         if not texts_in_cluster:
             return []
-
         try:
-            cluster_doc = " ".join(texts_in_cluster)
-            vectorizer = TfidfVectorizer(
-                max_features=500,
-                stop_words=POLISH_STOP_WORDS,
-                min_df=1,
-                max_df=0.95,
+            doc = " ".join(texts_in_cluster)
+            vec = TfidfVectorizer(
+                max_features=500, stop_words=POLISH_STOP_WORDS, min_df=1, max_df=0.95
             )
-            tfidf = vectorizer.fit_transform([cluster_doc])
-            feature_names = vectorizer.get_feature_names_out()
+            tfidf = vec.fit_transform([doc])
+            names = vec.get_feature_names_out()
             scores = tfidf.toarray()[0]
-            top_indices = scores.argsort()[-n:][::-1]
-            return [feature_names[i] for i in top_indices if scores[i] > 0]
+            top = scores.argsort()[-n:][::-1]
+            return [names[i] for i in top if scores[i] > 0]
         except Exception as e:
             logger.warning(f"TF-IDF error: {e}")
             return []
 
     def get_representative_samples(
-        self,
-        embeddings: np.ndarray,
-        labels: np.ndarray,
-        texts: list[str],
-        cluster_id: int,
-        n: int = 5,
+        self, embeddings: np.ndarray, labels: np.ndarray, texts: list[str],
+        cluster_id: int, n: int = 5,
     ) -> list[str]:
-        """
-        Zwraca n tekstow najblizszych centroidowi klastra.
-        """
         mask = labels == cluster_id
         indices = np.where(mask)[0]
-
         if len(indices) == 0:
             return []
-
-        cluster_embeddings = embeddings[indices]
-        centroid = cluster_embeddings.mean(axis=0)
-        distances = np.linalg.norm(cluster_embeddings - centroid, axis=1)
-        top_local_indices = distances.argsort()[:n]
-        top_global_indices = indices[top_local_indices]
-
-        return [texts[i] for i in top_global_indices]
+        cluster_emb = embeddings[indices]
+        centroid = cluster_emb.mean(axis=0)
+        dists = np.linalg.norm(cluster_emb - centroid, axis=1)
+        top = dists.argsort()[:n]
+        return [texts[indices[i]] for i in top]
 
     def build_topics(
-        self,
-        embeddings: np.ndarray,
-        coords_2d: np.ndarray,
-        labels: np.ndarray,
-        texts: list[str],
-        coherence_scores: dict[int, float],
+        self, embeddings: np.ndarray, coords_2d: np.ndarray, labels: np.ndarray,
+        texts: list[str], coherence_scores: dict[int, float],
     ) -> list[dict]:
-        """
-        Buduje liste topikow z danych klasteryzacji.
-        Etykiety i opisy beda uzupelnione przez LLM w nastepnym kroku.
-        """
-        unique_labels = sorted(set(labels))
+        unique = sorted(set(labels))
         topics = []
-
-        for cluster_id in unique_labels:
-            if cluster_id == -1:
+        for cid in unique:
+            if cid == -1:
                 continue
-
-            mask = labels == cluster_id
+            mask = labels == cid
             indices = np.where(mask)[0]
-            doc_count = int(mask.sum())
-
-            # Centroid w 2D
             cluster_coords = coords_2d[indices]
-            centroid_x = float(cluster_coords[:, 0].mean())
-            centroid_y = float(cluster_coords[:, 1].mean())
-
-            # Teksty klastra
             cluster_texts = [texts[i] for i in indices]
-
-            # Slowa kluczowe
             keywords = self.extract_keywords(cluster_texts)
-
-            # Probki reprezentatywne
-            samples = self.get_representative_samples(
-                embeddings, labels, texts, cluster_id, n=5
-            )
-
-            # Koherencja
-            coherence = coherence_scores.get(cluster_id, 0.5)
-
-            # Kolor
-            color = CLUSTER_COLORS[cluster_id % len(CLUSTER_COLORS)]
-
+            samples = self.get_representative_samples(embeddings, labels, texts, cid, n=5)
+            coherence = coherence_scores.get(cid, 0.5)
             topics.append({
-                "id": int(cluster_id),
-                "label": f"Klaster {cluster_id}",  # Placeholder - LLM nada nazwe
-                "description": "",  # Placeholder - LLM uzupelni
-                "documentCount": doc_count,
+                "id": int(cid),
+                "label": f"Klaster {cid}",
+                "description": "",
+                "documentCount": int(mask.sum()),
                 "sampleTexts": samples,
-                "color": color,
-                "centroidX": centroid_x,
-                "centroidY": centroid_y,
+                "color": CLUSTER_COLORS[cid % len(CLUSTER_COLORS)],
+                "centroidX": float(cluster_coords[:, 0].mean()),
+                "centroidY": float(cluster_coords[:, 1].mean()),
                 "coherenceScore": round(coherence, 3),
                 "keywords": keywords,
             })
-
         return topics
 
     def build_documents(
-        self,
-        texts: list[str],
-        labels: np.ndarray,
-        coords_2d: np.ndarray,
+        self, texts: list[str], labels: np.ndarray, coords_2d: np.ndarray,
     ) -> list[dict]:
-        """
-        Buduje liste dokumentow z wynikami klasteryzacji i wspolrzednymi 2D.
-        Normalizuje wspolrzedne do zakresu [5, 95] dla lepszej wizualizacji.
-        """
-        # Normalizuj do zakresu [5, 95]
         x_min, x_max = coords_2d[:, 0].min(), coords_2d[:, 0].max()
         y_min, y_max = coords_2d[:, 1].min(), coords_2d[:, 1].max()
-
         x_range = x_max - x_min if x_max != x_min else 1.0
         y_range = y_max - y_min if y_max != y_min else 1.0
 
@@ -295,7 +278,6 @@ class ClusteringService:
         for i, text in enumerate(texts):
             x_norm = 5 + 90 * (coords_2d[i, 0] - x_min) / x_range
             y_norm = 5 + 90 * (coords_2d[i, 1] - y_min) / y_range
-
             documents.append({
                 "id": f"doc-{i}",
                 "text": text,
@@ -303,21 +285,15 @@ class ClusteringService:
                 "x": round(float(x_norm), 2),
                 "y": round(float(y_norm), 2),
             })
-
         return documents
 
     def health_check(self) -> dict:
-        """Sprawdza status serwisu."""
         try:
-            import umap as umap_lib
-            import hdbscan as hdbscan_lib
-
+            import umap as u
+            import hdbscan as h
             return {
-                "umap": {"status": "up", "version": umap_lib.__version__},
-                "hdbscan": {"status": "up", "version": hdbscan_lib.__version__},
+                "umap": {"status": "up", "version": u.__version__},
+                "hdbscan": {"status": "up", "version": h.__version__},
             }
         except Exception as e:
-            return {
-                "umap": {"status": "error", "error": str(e)},
-                "hdbscan": {"status": "error", "error": str(e)},
-            }
+            return {"clustering": {"status": "error", "error": str(e)}}

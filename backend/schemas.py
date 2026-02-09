@@ -8,6 +8,30 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 
+# ===== Enums =====
+
+ClusteringAlgorithm = Literal["hdbscan", "kmeans", "agglomerative"]
+DimReductionMethod = Literal["umap", "pca", "tsne", "none"]
+JobStatus = Literal[
+    "queued", "embedding", "reducing", "clustering", "labeling", "completed", "failed"
+]
+
+
+# ===== Config =====
+
+class ClusteringConfig(BaseModel):
+    granularity: Literal["low", "medium", "high"] = "medium"
+    algorithm: ClusteringAlgorithm = "hdbscan"
+    dim_reduction: DimReductionMethod = Field(default="umap", alias="dimReduction")
+    dim_reduction_target: int = Field(default=50, alias="dimReductionTarget")
+    num_clusters: int | None = Field(default=None, alias="numClusters")
+    min_cluster_size: int = Field(default=5, alias="minClusterSize")
+    use_cached_embeddings: bool = Field(default=False, alias="useCachedEmbeddings")
+    cached_job_id: str | None = Field(default=None, alias="cachedJobId")
+
+    model_config = {"populate_by_name": True}
+
+
 # ===== Typy bazowe =====
 
 class DocumentItem(BaseModel):
@@ -52,6 +76,23 @@ class ClusteringResult(BaseModel):
     llm_suggestions: list[LLMSuggestion] = Field(alias="llmSuggestions")
     total_documents: int = Field(alias="totalDocuments")
     noise: int
+    job_id: str | None = Field(None, alias="jobId")
+
+    model_config = {"populate_by_name": True}
+
+
+# ===== Job =====
+
+class JobInfo(BaseModel):
+    job_id: str = Field(alias="jobId")
+    status: JobStatus
+    progress: float = 0.0
+    current_step: str = Field(default="", alias="currentStep")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+    config: ClusteringConfig
+    text_count: int = Field(alias="textCount")
+    error: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -60,8 +101,16 @@ class ClusteringResult(BaseModel):
 
 class ClusterRequest(BaseModel):
     texts: list[str]
-    granularity: Literal["low", "medium", "high"]
+    config: ClusteringConfig = Field(default_factory=ClusteringConfig)
     iteration: int = 0
+
+
+class ReclusterRequest(BaseModel):
+    """Recluster using cached embeddings from a previous job."""
+    job_id: str = Field(alias="jobId")
+    config: ClusteringConfig
+
+    model_config = {"populate_by_name": True}
 
 
 class RefineRequest(BaseModel):
@@ -127,10 +176,13 @@ class ExportRequest(BaseModel):
 class PipelineMeta(BaseModel):
     pipeline_duration_ms: int = Field(alias="pipelineDurationMs")
     encoder_model: str = Field(alias="encoderModel")
-    umap_params: dict = Field(alias="umapParams")
-    hdbscan_params: dict = Field(alias="hdbscanParams")
+    algorithm: str
+    dim_reduction: str = Field(alias="dimReduction")
+    dim_reduction_target: int = Field(alias="dimReductionTarget")
+    clustering_params: dict = Field(alias="clusteringParams")
     llm_model: str = Field(alias="llmModel")
     iteration: int
+    used_cached_embeddings: bool = Field(default=False, alias="usedCachedEmbeddings")
 
     model_config = {"populate_by_name": True}
 

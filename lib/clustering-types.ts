@@ -1,5 +1,54 @@
 export type Granularity = "low" | "medium" | "high"
 
+export type ClusteringAlgorithm = "hdbscan" | "kmeans" | "agglomerative"
+export type DimReductionMethod = "umap" | "pca" | "tsne" | "none"
+
+export type JobStatus = "queued" | "embedding" | "reducing" | "clustering" | "labeling" | "completed" | "failed"
+
+/** Advanced clustering configuration */
+export interface ClusteringConfig {
+  /** Granularity preset (simple mode) */
+  granularity: Granularity
+  /** Clustering algorithm */
+  algorithm: ClusteringAlgorithm
+  /** Dimensionality reduction method before clustering (separate from 2D viz) */
+  dimReduction: DimReductionMethod
+  /** Target dims for pre-clustering reduction (ignored if dimReduction is "none") */
+  dimReductionTarget: number
+  /** Desired number of clusters (used by kmeans/agglomerative; hint for hdbscan) */
+  numClusters: number | null
+  /** Minimum documents per cluster */
+  minClusterSize: number
+  /** Whether to use cached embeddings from a previous run */
+  useCachedEmbeddings: boolean
+  /** Previous job ID whose embeddings to reuse */
+  cachedJobId: string | null
+}
+
+export const DEFAULT_CLUSTERING_CONFIG: ClusteringConfig = {
+  granularity: "medium",
+  algorithm: "hdbscan",
+  dimReduction: "umap",
+  dimReductionTarget: 50,
+  numClusters: null,
+  minClusterSize: 5,
+  useCachedEmbeddings: false,
+  cachedJobId: null,
+}
+
+/** Job status from the queue */
+export interface JobInfo {
+  jobId: string
+  status: JobStatus
+  progress: number
+  currentStep: string
+  createdAt: string
+  updatedAt: string
+  config: ClusteringConfig
+  textCount: number
+  error?: string
+}
+
 export interface DocumentItem {
   id: string
   text: string
@@ -36,6 +85,7 @@ export interface ClusteringResult {
   llmSuggestions: LLMSuggestion[]
   totalDocuments: number
   noise: number
+  jobId?: string
 }
 
 export type WizardStep = "upload" | "configure" | "processing" | "review" | "explore"

@@ -1,7 +1,9 @@
 """
 Topic Discovery Hub - Cluster Router
-Endpointy: POST /cluster, POST /cluster/refine, PATCH /cluster/rename,
-           POST /cluster/merge, POST /cluster/split, POST /cluster/reclassify
+Endpoints: POST /cluster (submit job), GET /cluster/job/{id},
+           POST /cluster/recluster, POST /cluster/refine,
+           PATCH /cluster/rename, POST /cluster/merge,
+           POST /cluster/split, POST /cluster/reclassify
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 
 from schemas import (
     ClusterRequest,
-    ClusterResponse,
+    ReclusterRequest,
     RefineRequest,
     RefineResponse,
     RenameRequest,
@@ -22,9 +24,9 @@ from schemas import (
     SplitRequest,
     ReclassifyRequest,
     ErrorResponse,
-    ErrorDetail,
 )
 from services.pipeline import PipelineService
+from services.job_queue import JobQueueService
 from services.llm import LLMService
 from config import MIN_TEXTS, MAX_TEXTS, MAX_TEXT_LENGTH
 
@@ -37,104 +39,130 @@ def get_pipeline() -> PipelineService:
 
 
 # ================================================================
-# POST /cluster  --  Glowna klasteryzacja
+# POST /cluster  --  Submit clustering job (async)
 # ================================================================
 
 @router.post(
     "",
-    response_model=ClusterResponse,
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
-    summary="Uruchom pelny pipeline klasteryzacji",
+    summary="Submit a new clustering job",
     description=(
-        "Przyjmuje liste tekstow i granularnosc (low/medium/high). "
-        "Uruchamia: Encoder -> UMAP -> HDBSCAN -> Silhouette -> c-TF-IDF -> LLM labeling. "
-        "Zwraca dokumenty z koordynatami 2D, topiki z etykietami i sugestie LLM."
+        "Accepts texts and config, submits to the job queue. "
+        "Returns job_id immediately. Poll GET /cluster/job/{id} for status."
     ),
 )
-async def cluster_texts(req: ClusterRequest):
-    # Walidacja
+async def submit_cluster_job(req: ClusterRequest):
     if len(req.texts) < MIN_TEXTS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "TOO_FEW_TEXTS",
-                "message": f"Wymagane minimum {MIN_TEXTS} tekstow, otrzymano {len(req.texts)}.",
-            },
-        )
+        raise HTTPException(status_code=400, detail={
+            "code": "TOO_FEW_TEXTS",
+            "message": f"Min {MIN_TEXTS} texts, got {len(req.texts)}.",
+        })
     if len(req.texts) > MAX_TEXTS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "TOO_MANY_TEXTS",
-                "message": f"Maksimum {MAX_TEXTS} tekstow, otrzymano {len(req.texts)}.",
-            },
-        )
+        raise HTTPException(status_code=400, detail={
+            "code": "TOO_MANY_TEXTS",
+            "message": f"Max {MAX_TEXTS} texts, got {len(req.texts)}.",
+        })
 
-    # Przytnij zbyt dlugie teksty
-    texts = [t[:MAX_TEXT_LENGTH] for t in req.texts]
-
-    # Odfiltruj puste
-    texts = [t.strip() for t in texts if t.strip()]
+    texts = [t[:MAX_TEXT_LENGTH].strip() for t in req.texts if t.strip()]
     if len(texts) < MIN_TEXTS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "TOO_FEW_TEXTS",
-                "message": f"Po odfiltr. pustych zostalo {len(texts)} tekstow (min. {MIN_TEXTS}).",
-            },
-        )
+        raise HTTPException(status_code=400, detail={
+            "code": "TOO_FEW_TEXTS",
+            "message": f"After filtering: {len(texts)} texts (min {MIN_TEXTS}).",
+        })
 
     try:
+        config = req.config.model_dump(by_alias=True)
+        config["iteration"] = req.iteration
         pipeline = get_pipeline()
-        result = await pipeline.run_full_pipeline(
-            texts=texts,
-            granularity=req.granularity,
-            iteration=req.iteration,
-        )
-        return result
-
+        job_id = await pipeline.submit_job(texts, config)
+        return {"jobId": job_id, "status": "queued"}
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail={
+            "code": "QUEUE_FULL", "message": str(e),
+        })
     except Exception as e:
-        logger.exception(f"Pipeline error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "code": "PIPELINE_ERROR",
-                "message": f"Blad pipeline'u klasteryzacji: {str(e)}",
-            },
-        )
+        logger.exception(f"Submit error: {e}")
+        raise HTTPException(status_code=500, detail={
+            "code": "PIPELINE_ERROR", "message": str(e),
+        })
 
 
 # ================================================================
-# POST /cluster/refine  --  Sugestie LLM refinementu
+# GET /cluster/job/{job_id}  --  Poll job status
+# ================================================================
+
+@router.get(
+    "/job/{job_id}",
+    summary="Get job status and result",
+    description="Poll this endpoint to check job progress. When completed, result is included.",
+)
+async def get_job_status(job_id: str):
+    jobs = JobQueueService.get_instance()
+    job_info = await jobs.get_job(job_id)
+    if not job_info:
+        raise HTTPException(status_code=404, detail={
+            "code": "JOB_NOT_FOUND",
+            "message": f"Job {job_id} not found or expired.",
+        })
+
+    response = {**job_info}
+
+    # If completed, include the result
+    if job_info.get("status") == "completed":
+        result = await jobs.get_result(job_id)
+        if result:
+            response["result"] = result
+
+    return response
+
+
+# ================================================================
+# POST /cluster/recluster  --  Re-cluster with cached embeddings
 # ================================================================
 
 @router.post(
-    "/refine",
-    response_model=RefineResponse,
-    responses={400: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
-    summary="Generuj sugestie refinementu od LLM",
+    "/recluster",
+    summary="Re-cluster using cached embeddings from a previous job",
     description=(
-        "Analizuje istniejace klastry i generuje sugestie ulepszen "
-        "(merge, split, rename, reclassify). Nie zmienia danych -- zwraca tylko sugestie."
+        "Reuses embeddings from a previous job (skipping the expensive encoding step). "
+        "Allows changing algorithm, num_clusters, granularity, etc."
     ),
 )
-async def refine_clusters(req: RefineRequest):
-    if not req.topics:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "INVALID_INPUT",
-                "message": "Pole 'topics' jest wymagane i musi zawierac co najmniej 1 topik.",
-            },
-        )
+async def recluster(req: ReclusterRequest):
+    jobs = JobQueueService.get_instance()
+
+    has_cache = await jobs.has_cached_embeddings(req.job_id)
+    if not has_cache:
+        raise HTTPException(status_code=404, detail={
+            "code": "EMBEDDINGS_NOT_CACHED",
+            "message": f"No cached embeddings for job {req.job_id}. Run a full cluster first.",
+        })
 
     try:
-        llm = LLMService()
+        pipeline = get_pipeline()
+        config = req.config.model_dump(by_alias=True)
+        new_job_id = await pipeline.submit_recluster(req.job_id, config)
+        return {"jobId": new_job_id, "status": "queued", "cachedFrom": req.job_id}
+    except Exception as e:
+        logger.exception(f"Recluster error: {e}")
+        raise HTTPException(status_code=500, detail={
+            "code": "PIPELINE_ERROR", "message": str(e),
+        })
 
-        # Konwertuj Pydantic -> dict
+
+# ================================================================
+# POST /cluster/refine
+# ================================================================
+
+@router.post("/refine", response_model=RefineResponse, summary="LLM refinement suggestions")
+async def refine_clusters(req: RefineRequest):
+    if not req.topics:
+        raise HTTPException(status_code=400, detail={
+            "code": "INVALID_INPUT", "message": "Topics required.",
+        })
+    try:
+        llm = LLMService()
         topics_data = [t.model_dump(by_alias=True) for t in req.topics]
         prev_data = [s.model_dump(by_alias=True) for s in req.previous_suggestions]
-
         result = await llm.generate_refinement_suggestions(
             topics=topics_data,
             total_docs=len(req.documents),
@@ -143,190 +171,92 @@ async def refine_clusters(req: RefineRequest):
             previous_suggestions=prev_data,
         )
         return result
-
     except RuntimeError as e:
-        if "OPENAI_API_KEY" in str(e):
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "LLM_NOT_CONFIGURED",
-                    "message": str(e),
-                },
-            )
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "LLM_UNAVAILABLE",
-                "message": f"Blad serwisu LLM: {str(e)}",
-            },
-        )
+        raise HTTPException(status_code=503, detail={
+            "code": "LLM_UNAVAILABLE", "message": str(e),
+        })
     except Exception as e:
         logger.exception(f"Refine error: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "LLM_UNAVAILABLE",
-                "message": f"Nie udalo sie uzyskac sugestii: {str(e)}",
-            },
-        )
+        raise HTTPException(status_code=503, detail={
+            "code": "LLM_UNAVAILABLE", "message": str(e),
+        })
 
 
 # ================================================================
-# PATCH /cluster/rename  --  Zmiana nazwy topiku
+# PATCH /cluster/rename
 # ================================================================
 
-@router.patch(
-    "/rename",
-    response_model=RenameResponse,
-    responses={400: {"model": ErrorResponse}},
-    summary="Zmien nazwe topiku",
-)
+@router.patch("/rename", response_model=RenameResponse, summary="Rename a topic")
 async def rename_topic(req: RenameRequest):
     if not req.new_label or not req.new_label.strip():
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "INVALID_INPUT",
-                "message": "Pole 'newLabel' jest wymagane i nie moze byc puste.",
-            },
-        )
-    if len(req.new_label) > 100:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "INVALID_INPUT",
-                "message": "Nazwa topiku nie moze przekraczac 100 znakow.",
-            },
-        )
-
-    # W produkcji: audit log
+        raise HTTPException(status_code=400, detail={
+            "code": "INVALID_INPUT", "message": "newLabel required.",
+        })
     logger.info(f"Topic {req.topic_id} renamed to '{req.new_label.strip()}'")
-
     return {
-        "topicId": req.topic_id,
-        "oldLabel": "",  # w produkcji pobierz z bazy
-        "newLabel": req.new_label.strip(),
-        "updated": True,
+        "topicId": req.topic_id, "oldLabel": "",
+        "newLabel": req.new_label.strip(), "updated": True,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
 # ================================================================
-# POST /cluster/merge  --  Laczenie klastrow
+# POST /cluster/merge
 # ================================================================
 
-@router.post(
-    "/merge",
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
-    summary="Polacz 2+ klastrow w jeden",
-    description=(
-        "Przenosi dokumenty z klastrow zrodlowych do docelowego, "
-        "przelicza centroid, koherencje i keywords."
-    ),
-)
+@router.post("/merge", summary="Merge clusters")
 async def merge_clusters(req: MergeRequest):
     if len(req.cluster_ids) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "INVALID_INPUT",
-                "message": "Potrzeba co najmniej 2 klastrow do polaczenia.",
-            },
-        )
-
+        raise HTTPException(status_code=400, detail={
+            "code": "INVALID_INPUT", "message": "Need 2+ clusters.",
+        })
     try:
         pipeline = get_pipeline()
-        documents = [d.model_dump(by_alias=True) for d in req.documents]
-        topics = [t.model_dump(by_alias=True) for t in req.topics]
-
-        result = await pipeline.merge_clusters(
-            cluster_ids=req.cluster_ids,
-            new_label=req.new_label,
-            documents=documents,
-            topics=topics,
-        )
-        return result
-
+        docs = [d.model_dump(by_alias=True) for d in req.documents]
+        tops = [t.model_dump(by_alias=True) for t in req.topics]
+        return await pipeline.merge_clusters(req.cluster_ids, req.new_label, docs, tops)
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"code": "INVALID_INPUT", "message": str(e)})
     except Exception as e:
         logger.exception(f"Merge error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "PIPELINE_ERROR", "message": f"Nie udalo sie polaczyc klastrow: {str(e)}"},
-        )
+        raise HTTPException(status_code=500, detail={"code": "PIPELINE_ERROR", "message": str(e)})
 
 
 # ================================================================
-# POST /cluster/split  --  Podzial klastra
+# POST /cluster/split
 # ================================================================
 
-@router.post(
-    "/split",
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
-    summary="Podziel klaster na podklastry",
-    description="Dzieli klaster na 2+ podklastrow za pomoca KMeans na koordynatach 2D.",
-)
+@router.post("/split", summary="Split a cluster")
 async def split_cluster(req: SplitRequest):
     try:
         pipeline = get_pipeline()
-        documents = [d.model_dump(by_alias=True) for d in req.documents]
-        topics = [t.model_dump(by_alias=True) for t in req.topics]
-
-        result = await pipeline.split_cluster(
-            cluster_id=req.cluster_id,
-            num_subclusters=req.num_subclusters,
-            documents=documents,
-            topics=topics,
-        )
-        return result
-
+        docs = [d.model_dump(by_alias=True) for d in req.documents]
+        tops = [t.model_dump(by_alias=True) for t in req.topics]
+        return await pipeline.split_cluster(req.cluster_id, req.num_subclusters, docs, tops)
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"code": "INVALID_INPUT", "message": str(e)})
     except Exception as e:
         logger.exception(f"Split error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "PIPELINE_ERROR", "message": f"Nie udalo sie podzielic klastra: {str(e)}"},
-        )
+        raise HTTPException(status_code=500, detail={"code": "PIPELINE_ERROR", "message": str(e)})
 
 
 # ================================================================
-# POST /cluster/reclassify  --  Przenoszenie dokumentow
+# POST /cluster/reclassify
 # ================================================================
 
-@router.post(
-    "/reclassify",
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
-    summary="Przenies dokumenty miedzy klastrami",
-)
+@router.post("/reclassify", summary="Reclassify documents between clusters")
 async def reclassify_documents(req: ReclassifyRequest):
     if req.from_cluster_id == req.to_cluster_id:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "INVALID_INPUT",
-                "message": "Klaster zrodlowy i docelowy nie moga byc takie same.",
-            },
-        )
-
+        raise HTTPException(status_code=400, detail={
+            "code": "INVALID_INPUT", "message": "Source and target must differ.",
+        })
     try:
         pipeline = get_pipeline()
-        documents = [d.model_dump(by_alias=True) for d in req.documents]
-        topics = [t.model_dump(by_alias=True) for t in req.topics]
-
-        result = await pipeline.reclassify_documents(
-            document_ids=req.document_ids,
-            from_cluster_id=req.from_cluster_id,
-            to_cluster_id=req.to_cluster_id,
-            documents=documents,
-            topics=topics,
+        docs = [d.model_dump(by_alias=True) for d in req.documents]
+        tops = [t.model_dump(by_alias=True) for t in req.topics]
+        return await pipeline.reclassify_documents(
+            req.document_ids, req.from_cluster_id, req.to_cluster_id, docs, tops,
         )
-        return result
-
     except Exception as e:
         logger.exception(f"Reclassify error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "PIPELINE_ERROR", "message": f"Nie udalo sie reklasyfikowac: {str(e)}"},
-        )
+        raise HTTPException(status_code=500, detail={"code": "PIPELINE_ERROR", "message": str(e)})

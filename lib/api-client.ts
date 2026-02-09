@@ -4,6 +4,8 @@ import type {
   ClusterTopic,
   DocumentItem,
   LLMSuggestion,
+  ClusteringConfig,
+  JobInfo,
 } from "./clustering-types"
 
 /**
@@ -62,7 +64,76 @@ async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T>
   return response.json()
 }
 
-// ===== Glowna klasteryzacja =====
+// ===== Job-based clustering (async) =====
+
+interface SubmitJobResponse {
+  jobId: string
+  status: "queued"
+}
+
+/**
+ * Submit a clustering job. Returns immediately with a jobId.
+ * Use pollJobStatus() to track progress.
+ */
+export async function submitClusteringJob(
+  texts: string[],
+  config: ClusteringConfig,
+  iteration = 0
+): Promise<SubmitJobResponse> {
+  return apiRequest<SubmitJobResponse>("/api/cluster", {
+    method: "POST",
+    body: JSON.stringify({ texts, config, iteration }),
+  })
+}
+
+interface JobStatusResponse extends JobInfo {
+  result?: ClusteringResult & {
+    meta: {
+      pipelineDurationMs: number
+      encoderModel: string
+      algorithm: string
+      dimReduction: string
+      dimReductionTarget: number
+      clusteringParams: Record<string, unknown>
+      llmModel: string
+      iteration: number
+      usedCachedEmbeddings: boolean
+    }
+  }
+}
+
+/**
+ * Poll job status. When status === "completed", result is included.
+ */
+export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
+  return apiRequest<JobStatusResponse>(`/api/cluster/job/${jobId}`, {
+    method: "GET",
+  })
+}
+
+// ===== Recluster with cached embeddings =====
+
+interface ReclusterResponse {
+  jobId: string
+  status: "queued"
+  cachedFrom: string
+}
+
+/**
+ * Re-cluster using cached embeddings from a previous job.
+ * Skips the expensive embedding step.
+ */
+export async function submitRecluster(
+  sourceJobId: string,
+  config: ClusteringConfig
+): Promise<ReclusterResponse> {
+  return apiRequest<ReclusterResponse>("/api/cluster/recluster", {
+    method: "POST",
+    body: JSON.stringify({ jobId: sourceJobId, config }),
+  })
+}
+
+// ===== Legacy synchronous clustering (for mock mode) =====
 
 interface ClusterResponse extends ClusteringResult {
   meta: {
@@ -247,11 +318,13 @@ export async function checkHealth(): Promise<HealthResponse> {
 
 // ===== Download helper =====
 
-export function downloadBlob(blob: Blob, filename: string) {
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
-  const link = document.createElement("a")
-  link.href = url
-  link.download = filename
-  link.click()
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
   URL.revokeObjectURL(url)
 }
