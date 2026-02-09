@@ -112,6 +112,21 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
   })
 }
 
+// ===== Fetch job result (when completed) =====
+
+/**
+ * Fetch the clustering result for a completed job.
+ * The Python backend includes result in GET /cluster/job/:id when status=completed,
+ * so this just calls getJobStatus and extracts the result field.
+ */
+export async function getJobResult(jobId: string): Promise<ClusteringResult | null> {
+  const data = await getJobStatus(jobId)
+  if (data.status === "completed" && data.result) {
+    return data.result as ClusteringResult
+  }
+  return null
+}
+
 // ===== Recluster with cached embeddings =====
 
 interface ReclusterResponse {
@@ -315,6 +330,34 @@ interface HealthResponse {
 
 export async function checkHealth(): Promise<HealthResponse> {
   return apiRequest<HealthResponse>("/api/health", { method: "GET" })
+}
+
+// ===== List backend jobs =====
+
+export interface BackendJobSummary {
+  jobId: string
+  status: string
+  progress: number
+  textCount: number
+  config: ClusteringConfig | Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+  error?: string
+}
+
+/**
+ * List all jobs known to the backend (Redis).
+ * Returns empty array if backend is not connected.
+ */
+export async function listBackendJobs(): Promise<BackendJobSummary[]> {
+  try {
+    const data = await apiRequest<{ jobs: BackendJobSummary[] }>("/api/cluster/jobs", {
+      method: "GET",
+    })
+    return data.jobs ?? []
+  } catch {
+    return []
+  }
 }
 
 // ===== Download helper =====

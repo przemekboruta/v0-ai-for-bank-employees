@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-
+import { Clock } from "lucide-react"
 import { useEffect, useState, useRef, useCallback } from "react"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
@@ -13,15 +13,22 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { ClusteringResult, ClusteringConfig, JobStatus, SavedJob } from "@/lib/clustering-types"
+import type {
+  ClusteringResult,
+  ClusteringConfig,
+  JobStatus,
+  SavedJob,
+} from "@/lib/clustering-types"
 import {
-  runClustering,
+  submitClusteringJob,
+  getJobStatus as fetchJobStatus,
   saveJob,
   updateJob as updateJobStore,
+  getJob,
 } from "@/lib/api-client"
+import { generateMockClustering } from "@/lib/mock-clustering"
 
 interface StepProcessingProps {
   texts: string[]
@@ -41,16 +48,18 @@ const STATUS_LABELS: Record<JobStatus, string> = {
   labeling: "Analiza LLM -- etykiety i sugestie",
   completed: "Zakonczono",
   failed: "Blad",
+  interrupted: "Przerwano",
 }
 
 const STATUS_DETAILS: Record<JobStatus, string> = {
   queued: "Zlecenie oczekuje na przetworzenie...",
   embedding: "Kodowanie tekstów modelem ModernBERT-base...",
-  reducing: "Rzutowanie wektorów do przestrzeni o niższej wymiarowości...",
+  reducing: "Rzutowanie wektorów do przestrzeni o nizszej wymiarowosci...",
   clustering: "Wykrywanie naturalnych skupien dokumentów...",
   labeling: "Generowanie etykiet i sugestii usprawnien...",
   completed: "Pipeline zakonczony pomyslnie.",
   failed: "Wystapil blad podczas przetwarzania.",
+  interrupted: "Przetwarzanie zostalo przerwane.",
 }
 
 const STATUS_ICONS: Record<JobStatus, React.ElementType> = {
@@ -61,6 +70,7 @@ const STATUS_ICONS: Record<JobStatus, React.ElementType> = {
   labeling: Sparkles,
   completed: CheckCircle2,
   failed: AlertTriangle,
+  interrupted: Clock,
 }
 
 const STATUS_ORDER: JobStatus[] = [
@@ -71,6 +81,15 @@ const STATUS_ORDER: JobStatus[] = [
   "labeling",
   "completed",
 ]
+
+const STAGE_PROGRESS: Record<string, number> = {
+  queued: 2,
+  embedding: 15,
+  reducing: 35,
+  clustering: 55,
+  labeling: 75,
+  completed: 100,
+}
 
 export function StepProcessing({
   texts,
@@ -84,101 +103,248 @@ export function StepProcessing({
   const [status, setStatus] = useState<JobStatus>("queued")
   const [progress, setProgress] = useState(0)
   const [jobId, setJobId] = useState<string | null>(null)
-  const [userWaiting, setUserWaiting] = useState(true)
   const [submitted, setSubmitted] = useState(false)
-  const mountedRef = useRef(true)
+  const [isBackendMode, setIsBackendMode] = useState<boolean | null>(null)
 
-  // Create and persist the job, then run mock pipeline
+  const hasStartedRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
+
+  // ---- Detect mode: backend (real) vs mock ----
   useEffect(() => {
-    mountedRef.current = true
-
-    const id = `mock-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setJobId(id)
-
-    // Save initial job entry
-    const newJob: SavedJob = {
-      jobId: id,
-      name: jobName,
-      status: "queued",
-      progress: 0,
-      textCount: texts.length,
-      topicCount: null,
-      config,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      result: null,
+    let cancelled = false
+    async function detect() {
+      try {
+        const res = await fetch("/api/health")
+        if (!res.ok) throw new Error()
+        const data = await res.json()
+        const comps = data.components ?? {}
+        const allMock = Object.values(comps).every(
+          (c: unknown) => (c as { status: string }).status === "mock"
+        )
+        if (!cancelled) setIsBackendMode(!allMock)
+      } catch {
+        if (!cancelled) setIsBackendMode(false)
+      }
     }
-    saveJob(newJob)
-    setSubmitted(true)
+    detect()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
-    // Run mock pipeline stages
-    const stages: { status: JobStatus; durationMs: number }[] = [
-      { status: "embedding", durationMs: config.useCachedEmbeddings ? 400 : 1800 },
-      { status: "reducing", durationMs: config.dimReduction === "none" ? 200 : 1200 },
-      { status: "clustering", durationMs: 1400 },
-      { status: "labeling", durationMs: 1600 },
-    ]
+  // ---- Start pipeline once mode is known ----
+  useEffect(() => {
+    if (isBackendMode === null) return
+    if (hasStartedRef.current) return
+    hasStartedRef.current = true
 
-    let elapsed = 0
-    const totalDuration = stages.reduce((sum, s) => sum + s.durationMs, 0)
+    const controller = new AbortController()
+    abortRef.current = controller
 
-    async function runStages() {
+    if (isBackendMode) {
+      runRealPipeline(controller.signal)
+    } else {
+      runMockPipeline(controller.signal)
+    }
+
+    return () => {
+      controller.abort()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBackendMode])
+
+  // ---- Wait helper that respects abort ----
+  const wait = useCallback((ms: number, signal: AbortSignal): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(new Error("aborted"))
+      const timer = setTimeout(resolve, ms)
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer)
+          reject(new Error("aborted"))
+        },
+        { once: true }
+      )
+    })
+  }, [])
+
+  // ---- MOCK pipeline: runs entirely locally, never hits API ----
+  const runMockPipeline = useCallback(
+    async (signal: AbortSignal) => {
+      const id = `mock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setJobId(id)
+      setSubmitted(true)
+
+      const newJob: SavedJob = {
+        jobId: id,
+        name: jobName,
+        status: "queued",
+        progress: 0,
+        textCount: texts.length,
+        topicCount: null,
+        config,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        result: null,
+      }
+      saveJob(newJob)
+
+      const stages: { status: JobStatus; durationMs: number }[] = [
+        { status: "embedding", durationMs: config.useCachedEmbeddings ? 400 : 1800 },
+        { status: "reducing", durationMs: config.dimReduction === "none" ? 200 : 1200 },
+        { status: "clustering", durationMs: 1400 },
+        { status: "labeling", durationMs: 1600 },
+      ]
+
+      let elapsed = 0
+      const totalDuration = stages.reduce((sum, s) => sum + s.durationMs, 0)
+
       for (const stage of stages) {
-        if (!mountedRef.current) return
+        if (signal.aborted) return
         setStatus(stage.status)
-        updateJobStore(id, { status: stage.status })
 
-        const startProgress = (elapsed / totalDuration) * 100
-        const endProgress = ((elapsed + stage.durationMs) / totalDuration) * 100
-        const steps = 40
+        const startProgress = (elapsed / totalDuration) * 95
+        const endProgress = ((elapsed + stage.durationMs) / totalDuration) * 95
+        const steps = 30
         const stepMs = stage.durationMs / steps
 
         for (let i = 0; i <= steps; i++) {
-          if (!mountedRef.current) return
-          await new Promise((r) => setTimeout(r, stepMs))
+          if (signal.aborted) return
+          try {
+            await wait(stepMs, signal)
+          } catch {
+            return
+          }
           const p = startProgress + ((endProgress - startProgress) * i) / steps
-          const rounded = Math.min(p, 99)
-          setProgress(rounded)
-          updateJobStore(id, { progress: rounded })
+          setProgress(Math.min(p, 99))
+          updateJobStore(id, { status: stage.status, progress: Math.min(p, 99) })
         }
         elapsed += stage.durationMs
       }
 
-      if (!mountedRef.current) return
+      if (signal.aborted) return
 
+      // Generate result LOCALLY -- no API call at all
+      const result = generateMockClustering(texts, config.granularity, 42 + iteration)
+      result.jobId = id
+
+      setStatus("completed")
+      setProgress(100)
+      updateJobStore(id, {
+        status: "completed",
+        progress: 100,
+        result,
+        topicCount: result.topics.length,
+      })
+
+      // Small delay then auto-advance
       try {
-        const result = await runClustering(texts, config.granularity, iteration)
-        if (!mountedRef.current) return
-
-        setStatus("completed")
-        setProgress(100)
-        updateJobStore(id, {
-          status: "completed",
-          progress: 100,
-          result,
-          topicCount: result.topics.length,
-        })
-
-        // Auto-transition if user is still waiting
-        setTimeout(() => {
-          if (mountedRef.current) onComplete(result, id)
-        }, 800)
-      } catch (err) {
-        if (!mountedRef.current) return
-        const errMsg = err instanceof Error ? err.message : "Nieznany blad pipeline"
-        setStatus("failed")
-        updateJobStore(id, { status: "failed", error: errMsg })
-        onError(errMsg)
+        await wait(600, signal)
+      } catch {
+        return
       }
-    }
+      if (!signal.aborted) onComplete(result, id)
+    },
+    [texts, config, iteration, jobName, onComplete, wait]
+  )
 
-    runStages()
+  // ---- REAL pipeline: submit to backend, poll until done ----
+  const runRealPipeline = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const jobInfo = await submitClusteringJob(texts, config, iteration)
+        const id = jobInfo.jobId
+        setJobId(id)
+        setSubmitted(true)
 
-    return () => {
-      mountedRef.current = false
+        const newJob: SavedJob = {
+          jobId: id,
+          name: jobName,
+          status: "queued",
+          progress: 0,
+          textCount: texts.length,
+          topicCount: null,
+          config,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          result: null,
+        }
+        saveJob(newJob)
+
+        // Poll loop
+        while (!signal.aborted) {
+          try {
+            await wait(2500, signal)
+          } catch {
+            return
+          }
+          if (signal.aborted) return
+
+          try {
+            const statusData = await fetchJobStatus(id)
+            const s = (statusData.status ?? "queued") as JobStatus
+            const p =
+              typeof statusData.progress === "number"
+                ? statusData.progress
+                : STAGE_PROGRESS[s] ?? 0
+
+            setStatus(s)
+            setProgress(p)
+            updateJobStore(id, { status: s, progress: p })
+
+            if (s === "completed") {
+              // The Python backend includes result in the status response
+              const result = statusData.result as ClusteringResult | undefined
+              if (result && result.topics) {
+                updateJobStore(id, {
+                  status: "completed",
+                  progress: 100,
+                  topicCount: result.topics.length,
+                  result,
+                })
+                onComplete(result, id)
+              } else {
+                throw new Error("Wynik przetwarzania niedostepny w odpowiedzi serwera.")
+              }
+              return
+            }
+
+            if (s === "failed") {
+              const errMsg =
+                statusData.error || "Nieznany blad po stronie backendu."
+              setStatus("failed")
+              updateJobStore(id, { status: "failed", error: errMsg })
+              onError(errMsg)
+              return
+            }
+          } catch (e) {
+            // Network error during polling -- keep trying
+            console.log("[v0] Poll error, retrying:", e)
+          }
+        }
+      } catch (e) {
+        if (signal.aborted) return
+        const msg =
+          e instanceof Error ? e.message : "Blad wysylania zlecenia do backendu."
+        setStatus("failed")
+        onError(msg)
+      }
+    },
+    [texts, config, iteration, jobName, onComplete, onError, wait]
+  )
+
+  // If user navigates back and then returns, check if job already finished
+  useEffect(() => {
+    if (!jobId) return
+    const saved = getJob(jobId)
+    if (saved?.status === "completed" && saved.result) {
+      setStatus("completed")
+      setProgress(100)
+      const timer = setTimeout(() => onComplete(saved.result!, jobId), 300)
+      return () => clearTimeout(timer)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [jobId, onComplete])
 
   const currentIdx = STATUS_ORDER.indexOf(status)
   const failed = status === "failed"
@@ -200,7 +366,9 @@ export function StepProcessing({
             ? "Wyniki sa gotowe. Za chwile przejdziesz do przegladu."
             : failed
               ? "Sprobuj ponownie lub zmien parametry klasteryzacji."
-              : "Mozesz wrocic do panelu i kontynuowac pozniej -- przetwarzanie jest kolejkowane w tle."}
+              : isBackendMode
+                ? "Zlecenie jest przetwarzane na serwerze. Mozesz wrocic do panelu i kontynuowac pozniej."
+                : "Trwa symulacja przetwarzania..."}
         </p>
       </div>
 
@@ -247,7 +415,6 @@ export function StepProcessing({
           const isDone = currentIdx > idx
           const isFuture = currentIdx < idx
 
-          // Cached embedding -- show as skipped
           if (stageStatus === "embedding" && config.useCachedEmbeddings && isDone) {
             return (
               <div
@@ -268,7 +435,6 @@ export function StepProcessing({
             )
           }
 
-          // No dim reduction -- show as skipped
           if (stageStatus === "reducing" && config.dimReduction === "none" && isDone) {
             return (
               <div
@@ -317,7 +483,9 @@ export function StepProcessing({
                 >
                   {STATUS_LABELS[stageStatus]}
                 </p>
-                <p className="text-xs text-muted-foreground">{STATUS_DETAILS[stageStatus]}</p>
+                {isActive && (
+                  <p className="text-xs text-muted-foreground">{STATUS_DETAILS[stageStatus]}</p>
+                )}
               </div>
               {isDone && <span className="text-xs font-medium text-accent">Gotowe</span>}
             </div>
@@ -335,16 +503,16 @@ export function StepProcessing({
         </div>
       )}
 
-      {/* Action bar: go back to dashboard (non-blocking) */}
+      {/* Go to dashboard (non-blocking) */}
       {!completed && !failed && submitted && (
         <div className="glass w-full rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-0.5">
-              <p className="text-sm font-medium text-foreground">
-                Nie musisz czekac
-              </p>
+              <p className="text-sm font-medium text-foreground">Nie musisz czekac</p>
               <p className="text-xs text-muted-foreground">
-                Wroc do panelu -- zlecenie bedzie kontynuowane w tle. Wyniki beda dostepne w liscie analiz.
+                {isBackendMode
+                  ? "Wroc do panelu -- wyniki beda dostepne po zakonczeniu przetwarzania na serwerze."
+                  : "Wroc do panelu -- wyniki beda dostepne po zakonczeniu symulacji."}
               </p>
             </div>
             <Button
@@ -357,6 +525,25 @@ export function StepProcessing({
             </Button>
           </div>
         </div>
+      )}
+
+      {/* Failed -> go back */}
+      {failed && (
+        <Button
+          variant="outline"
+          onClick={onBackToDashboard}
+          className="gap-2 border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Wroc do panelu
+        </Button>
+      )}
+
+      {/* Job ID for reference */}
+      {jobId && (
+        <p className="text-center text-xs text-muted-foreground/50">
+          ID zlecenia: <span className="font-mono">{jobId}</span>
+        </p>
       )}
     </div>
   )

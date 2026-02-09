@@ -253,6 +253,53 @@ class JobQueueService:
         r = await self._get_redis()
         return bool(await r.exists(self._key("embeddings", job_id)))
 
+    # ---- List all known jobs ----
+
+    async def list_jobs(self) -> list[dict]:
+        """Return info for all active + recent jobs."""
+        r = await self._get_redis()
+        results = []
+
+        # Active jobs
+        active_ids = await r.smembers(self._key("active_jobs"))
+        seen = set()
+        for raw_id in active_ids:
+            job_id = raw_id.decode() if isinstance(raw_id, bytes) else raw_id
+            seen.add(job_id)
+            info = await self.get_job(job_id)
+            if info:
+                results.append(info)
+
+        # Scan for completed/failed jobs not in active set
+        # Use SCAN to find tdh:job:* keys
+        cursor = 0
+        prefix = self._key("job", "")
+        while True:
+            cursor, keys = await r.scan(cursor, match=f"{prefix}*", count=100)
+            for key_raw in keys:
+                key = key_raw.decode() if isinstance(key_raw, bytes) else key_raw
+                # Skip result sub-keys (tdh:job:xxx:result)
+                parts = key.replace(prefix, "").split(":")
+                if len(parts) != 1:
+                    continue
+                job_id = parts[0]
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+                info = await self.get_job(job_id)
+                if info:
+                    results.append(info)
+
+            if cursor == 0:
+                break
+
+        # Sort newest first
+        results.sort(
+            key=lambda j: j.get("createdAt", ""),
+            reverse=True,
+        )
+        return results
+
     # ---- Health ----
 
     async def health_check(self) -> dict:
