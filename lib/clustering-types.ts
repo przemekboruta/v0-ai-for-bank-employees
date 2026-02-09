@@ -3,7 +3,7 @@ export type Granularity = "low" | "medium" | "high"
 export type ClusteringAlgorithm = "hdbscan" | "kmeans" | "agglomerative"
 export type DimReductionMethod = "umap" | "pca" | "tsne" | "none"
 
-export type JobStatus = "queued" | "embedding" | "reducing" | "clustering" | "labeling" | "completed" | "failed"
+export type JobStatus = "queued" | "embedding" | "reducing" | "clustering" | "labeling" | "completed" | "failed" | "interrupted"
 
 /** Advanced clustering configuration */
 export interface ClusteringConfig {

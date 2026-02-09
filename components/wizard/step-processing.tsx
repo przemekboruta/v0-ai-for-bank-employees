@@ -1,6 +1,7 @@
 "use client"
 
 import React from "react"
+import { Clock } from "lucide-react"
 
 import { useEffect, useState, useRef, useCallback } from "react"
 import { Progress } from "@/components/ui/progress"
@@ -13,14 +14,19 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { ClusteringResult, ClusteringConfig, JobStatus, SavedJob } from "@/lib/clustering-types"
+import type {
+  ClusteringResult,
+  ClusteringConfig,
+  JobStatus,
+  SavedJob,
+} from "@/lib/clustering-types"
 import {
   runClustering,
   saveJob,
   updateJob as updateJobStore,
+  getJob,
 } from "@/lib/api-client"
 
 interface StepProcessingProps {
@@ -41,6 +47,7 @@ const STATUS_LABELS: Record<JobStatus, string> = {
   labeling: "Analiza LLM -- etykiety i sugestie",
   completed: "Zakonczono",
   failed: "Blad",
+  interrupted: "Przerwano",
 }
 
 const STATUS_DETAILS: Record<JobStatus, string> = {
@@ -51,6 +58,7 @@ const STATUS_DETAILS: Record<JobStatus, string> = {
   labeling: "Generowanie etykiet i sugestii usprawnien...",
   completed: "Pipeline zakonczony pomyslnie.",
   failed: "Wystapil blad podczas przetwarzania.",
+  interrupted: "Przetwarzanie zostalo przerwane.",
 }
 
 const STATUS_ICONS: Record<JobStatus, React.ElementType> = {
@@ -61,6 +69,7 @@ const STATUS_ICONS: Record<JobStatus, React.ElementType> = {
   labeling: Sparkles,
   completed: CheckCircle2,
   failed: AlertTriangle,
+  interrupted: Clock,
 }
 
 const STATUS_ORDER: JobStatus[] = [
@@ -84,15 +93,21 @@ export function StepProcessing({
   const [status, setStatus] = useState<JobStatus>("queued")
   const [progress, setProgress] = useState(0)
   const [jobId, setJobId] = useState<string | null>(null)
-  const [userWaiting, setUserWaiting] = useState(true)
   const [submitted, setSubmitted] = useState(false)
-  const mountedRef = useRef(true)
 
-  // Create and persist the job, then run mock pipeline
+  // Guard against StrictMode double-invoke and multiple mounts
+  const hasStartedRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
+
   useEffect(() => {
-    mountedRef.current = true
+    // Prevent double execution (React StrictMode calls effects twice)
+    if (hasStartedRef.current) return
+    hasStartedRef.current = true
 
-    const id = `mock-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    const abort = new AbortController()
+    abortRef.current = abort
+
+    const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setJobId(id)
 
     // Save initial job entry
@@ -113,8 +128,14 @@ export function StepProcessing({
 
     // Run mock pipeline stages
     const stages: { status: JobStatus; durationMs: number }[] = [
-      { status: "embedding", durationMs: config.useCachedEmbeddings ? 400 : 1800 },
-      { status: "reducing", durationMs: config.dimReduction === "none" ? 200 : 1200 },
+      {
+        status: "embedding",
+        durationMs: config.useCachedEmbeddings ? 400 : 1800,
+      },
+      {
+        status: "reducing",
+        durationMs: config.dimReduction === "none" ? 200 : 1200,
+      },
       { status: "clustering", durationMs: 1400 },
       { status: "labeling", durationMs: 1600 },
     ]
@@ -124,17 +145,18 @@ export function StepProcessing({
 
     async function runStages() {
       for (const stage of stages) {
-        if (!mountedRef.current) return
+        if (abort.signal.aborted) return
         setStatus(stage.status)
         updateJobStore(id, { status: stage.status })
 
         const startProgress = (elapsed / totalDuration) * 100
-        const endProgress = ((elapsed + stage.durationMs) / totalDuration) * 100
+        const endProgress =
+          ((elapsed + stage.durationMs) / totalDuration) * 100
         const steps = 40
         const stepMs = stage.durationMs / steps
 
         for (let i = 0; i <= steps; i++) {
-          if (!mountedRef.current) return
+          if (abort.signal.aborted) return
           await new Promise((r) => setTimeout(r, stepMs))
           const p = startProgress + ((endProgress - startProgress) * i) / steps
           const rounded = Math.min(p, 99)
@@ -144,11 +166,15 @@ export function StepProcessing({
         elapsed += stage.durationMs
       }
 
-      if (!mountedRef.current) return
+      if (abort.signal.aborted) return
 
       try {
-        const result = await runClustering(texts, config.granularity, iteration)
-        if (!mountedRef.current) return
+        const result = await runClustering(
+          texts,
+          config.granularity,
+          iteration
+        )
+        if (abort.signal.aborted) return
 
         setStatus("completed")
         setProgress(100)
@@ -159,13 +185,14 @@ export function StepProcessing({
           topicCount: result.topics.length,
         })
 
-        // Auto-transition if user is still waiting
+        // Auto-transition if user is still on this screen
         setTimeout(() => {
-          if (mountedRef.current) onComplete(result, id)
+          if (!abort.signal.aborted) onComplete(result, id)
         }, 800)
       } catch (err) {
-        if (!mountedRef.current) return
-        const errMsg = err instanceof Error ? err.message : "Nieznany blad pipeline"
+        if (abort.signal.aborted) return
+        const errMsg =
+          err instanceof Error ? err.message : "Nieznany blad pipeline"
         setStatus("failed")
         updateJobStore(id, { status: "failed", error: errMsg })
         onError(errMsg)
@@ -175,10 +202,22 @@ export function StepProcessing({
     runStages()
 
     return () => {
-      mountedRef.current = false
+      abort.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // When user navigates away and back, and the pipeline finished while
+  // they were on the dashboard, auto-complete immediately
+  useEffect(() => {
+    if (!jobId) return
+    const saved = getJob(jobId)
+    if (saved?.status === "completed" && saved.result) {
+      setStatus("completed")
+      setProgress(100)
+      setTimeout(() => onComplete(saved.result!, jobId), 300)
+    }
+  }, [jobId, onComplete])
 
   const currentIdx = STATUS_ORDER.indexOf(status)
   const failed = status === "failed"
@@ -211,7 +250,8 @@ export function StepProcessing({
         </span>
         {config.dimReduction !== "none" && (
           <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-muted-foreground">
-            {config.dimReduction.toUpperCase()} &rarr; {config.dimReductionTarget}D
+            {config.dimReduction.toUpperCase()} &rarr;{" "}
+            {config.dimReductionTarget}D
           </span>
         )}
         {config.numClusters && (
@@ -247,8 +287,11 @@ export function StepProcessing({
           const isDone = currentIdx > idx
           const isFuture = currentIdx < idx
 
-          // Cached embedding -- show as skipped
-          if (stageStatus === "embedding" && config.useCachedEmbeddings && isDone) {
+          if (
+            stageStatus === "embedding" &&
+            config.useCachedEmbeddings &&
+            isDone
+          ) {
             return (
               <div
                 key={stageStatus}
@@ -261,15 +304,20 @@ export function StepProcessing({
                   <p className="text-sm font-medium text-muted-foreground line-through">
                     {STATUS_LABELS[stageStatus]}
                   </p>
-                  <p className="text-xs text-muted-foreground">Pominieto -- uzyto cache</p>
+                  <p className="text-xs text-muted-foreground">
+                    Pominieto -- uzyto cache
+                  </p>
                 </div>
                 <span className="text-xs font-medium text-accent">Cache</span>
               </div>
             )
           }
 
-          // No dim reduction -- show as skipped
-          if (stageStatus === "reducing" && config.dimReduction === "none" && isDone) {
+          if (
+            stageStatus === "reducing" &&
+            config.dimReduction === "none" &&
+            isDone
+          ) {
             return (
               <div
                 key={stageStatus}
@@ -282,7 +330,9 @@ export function StepProcessing({
                   <p className="text-sm font-medium text-muted-foreground line-through">
                     {STATUS_LABELS[stageStatus]}
                   </p>
-                  <p className="text-xs text-muted-foreground">Pominieto -- brak redukcji</p>
+                  <p className="text-xs text-muted-foreground">
+                    Pominieto -- brak redukcji
+                  </p>
                 </div>
               </div>
             )
@@ -295,7 +345,8 @@ export function StepProcessing({
                 "flex items-center gap-4 rounded-xl p-4 transition-all duration-500",
                 isActive && "glass border-primary/20 glow-primary",
                 isDone && "glass-subtle opacity-50",
-                isFuture && "bg-white/[0.02] border border-white/[0.04] opacity-25"
+                isFuture &&
+                  "bg-white/[0.02] border border-white/[0.04] opacity-25"
               )}
             >
               <div
@@ -306,7 +357,9 @@ export function StepProcessing({
                   isFuture && "bg-white/[0.04] text-muted-foreground"
                 )}
               >
-                <Icon className={cn("h-4 w-4", isActive && "animate-pulse")} />
+                <Icon
+                  className={cn("h-4 w-4", isActive && "animate-pulse")}
+                />
               </div>
               <div className="flex-1">
                 <p
@@ -317,9 +370,13 @@ export function StepProcessing({
                 >
                   {STATUS_LABELS[stageStatus]}
                 </p>
-                <p className="text-xs text-muted-foreground">{STATUS_DETAILS[stageStatus]}</p>
+                <p className="text-xs text-muted-foreground">
+                  {STATUS_DETAILS[stageStatus]}
+                </p>
               </div>
-              {isDone && <span className="text-xs font-medium text-accent">Gotowe</span>}
+              {isDone && (
+                <span className="text-xs font-medium text-accent">Gotowe</span>
+              )}
             </div>
           )
         })}
@@ -330,7 +387,8 @@ export function StepProcessing({
         <div className="glass flex w-full flex-col items-center gap-4 rounded-2xl border-destructive/20 p-6">
           <AlertTriangle className="h-8 w-8 text-destructive" />
           <p className="text-center text-sm text-destructive">
-            Przetwarzanie nie powiodlo sie. Sprobuj zmienic parametry i uruchom ponownie.
+            Przetwarzanie nie powiodlo sie. Sprobuj zmienic parametry i uruchom
+            ponownie.
           </p>
         </div>
       )}
@@ -344,7 +402,8 @@ export function StepProcessing({
                 Nie musisz czekac
               </p>
               <p className="text-xs text-muted-foreground">
-                Wroc do panelu -- zlecenie bedzie kontynuowane w tle. Wyniki beda dostepne w liscie analiz.
+                Wroc do panelu -- zlecenie bedzie kontynuowane w tle. Wyniki
+                beda dostepne w liscie analiz.
               </p>
             </div>
             <Button

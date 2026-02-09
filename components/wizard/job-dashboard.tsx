@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -13,6 +13,8 @@ import {
   getJobStatus,
   updateJob,
   getJob,
+  runClustering,
+  saveJob,
 } from "@/lib/api-client"
 import {
   Plus,
@@ -25,6 +27,7 @@ import {
   RefreshCw,
   History,
   Sparkles,
+  Play,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -37,13 +40,54 @@ const STATUS_CONFIG: Record<
   string,
   { label: string; color: string; icon: React.ElementType; bgClass: string }
 > = {
-  queued: { label: "W kolejce", color: "text-muted-foreground", icon: Clock, bgClass: "bg-white/[0.06]" },
-  embedding: { label: "Embeddingi", color: "text-chart-3", icon: Loader2, bgClass: "bg-chart-3/10" },
-  reducing: { label: "Redukcja", color: "text-chart-5", icon: Loader2, bgClass: "bg-chart-5/10" },
-  clustering: { label: "Klasteryzacja", color: "text-primary", icon: Loader2, bgClass: "bg-primary/10" },
-  labeling: { label: "LLM", color: "text-accent", icon: Sparkles, bgClass: "bg-accent/10" },
-  completed: { label: "Zakonczono", color: "text-accent", icon: CheckCircle2, bgClass: "bg-accent/10" },
-  failed: { label: "Blad", color: "text-destructive", icon: AlertTriangle, bgClass: "bg-destructive/10" },
+  queued: {
+    label: "W kolejce",
+    color: "text-muted-foreground",
+    icon: Clock,
+    bgClass: "bg-white/[0.06]",
+  },
+  embedding: {
+    label: "Embeddingi",
+    color: "text-chart-3",
+    icon: Loader2,
+    bgClass: "bg-chart-3/10",
+  },
+  reducing: {
+    label: "Redukcja",
+    color: "text-chart-5",
+    icon: Loader2,
+    bgClass: "bg-chart-5/10",
+  },
+  clustering: {
+    label: "Klasteryzacja",
+    color: "text-primary",
+    icon: Loader2,
+    bgClass: "bg-primary/10",
+  },
+  labeling: {
+    label: "LLM",
+    color: "text-accent",
+    icon: Sparkles,
+    bgClass: "bg-accent/10",
+  },
+  completed: {
+    label: "Zakonczono",
+    color: "text-accent",
+    icon: CheckCircle2,
+    bgClass: "bg-accent/10",
+  },
+  failed: {
+    label: "Blad",
+    color: "text-destructive",
+    icon: AlertTriangle,
+    bgClass: "bg-destructive/10",
+  },
+  interrupted: {
+    label: "Przerwano",
+    color: "text-chart-3",
+    icon: Clock,
+    bgClass: "bg-chart-3/10",
+  },
 }
 
 function timeAgo(dateStr: string): string {
@@ -59,45 +103,94 @@ function timeAgo(dateStr: string): string {
   return `${diffD} dn. temu`
 }
 
-export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) {
+/**
+ * Check if a mock job is stale (user left the processing screen before
+ * it finished). In production, the Python backend + Redis handles this.
+ * For mock jobs, we mark them as "interrupted" since no background worker
+ * exists to finish them.
+ */
+function fixStaleMockJobs(): boolean {
+  let changed = false
+  const jobs = listJobs()
+  for (const job of jobs) {
+    if (
+      job.jobId.startsWith("job-") &&
+      !["completed", "failed", "interrupted"].includes(job.status)
+    ) {
+      // If the job was last updated more than 10 seconds ago and is still
+      // "in progress", it was abandoned when the user left StepProcessing.
+      const lastUpdate = new Date(job.updatedAt).getTime()
+      const now = Date.now()
+      if (now - lastUpdate > 10_000) {
+        updateJob(job.jobId, {
+          status: "interrupted" as SavedJob["status"],
+        })
+        changed = true
+      }
+    }
+  }
+  return changed
+}
+
+export function JobDashboard({
+  onNewAnalysis,
+  onResumeJob,
+}: JobDashboardProps) {
   const [jobs, setJobs] = useState<SavedJob[]>([])
-  const [pollingIds, setPollingIds] = useState<Set<string>>(new Set())
+  const [resumingId, setResumingId] = useState<string | null>(null)
 
   const refreshJobs = useCallback(() => {
     setJobs(listJobs())
   }, [])
 
-  // Load jobs on mount
+  // Load jobs on mount, fix stale mock jobs
   useEffect(() => {
+    fixStaleMockJobs()
     refreshJobs()
   }, [refreshJobs])
 
-  // Poll in-progress jobs
+  // Poll in-progress jobs (for production backend mode)
   useEffect(() => {
     const inProgress = jobs.filter(
-      (j) => !["completed", "failed"].includes(j.status)
+      (j) => !["completed", "failed", "interrupted"].includes(j.status)
     )
     if (inProgress.length === 0) return
 
     const interval = setInterval(async () => {
       let changed = false
       for (const job of inProgress) {
-        if (job.jobId.startsWith("mock-")) {
-          // Mock jobs complete via the step-processing component's local simulation.
-          // We check the local store for updates.
+        // Mock jobs: check local store for updates from StepProcessing
+        if (job.jobId.startsWith("job-")) {
           const latest = getJob(job.jobId)
           if (latest && latest.status !== job.status) changed = true
+          // If still in progress and stale, mark interrupted
+          if (
+            latest &&
+            !["completed", "failed", "interrupted"].includes(latest.status)
+          ) {
+            const lastUpdate = new Date(latest.updatedAt).getTime()
+            if (Date.now() - lastUpdate > 10_000) {
+              updateJob(job.jobId, {
+                status: "interrupted" as SavedJob["status"],
+              })
+              changed = true
+            }
+          }
           continue
         }
+        // Production jobs: poll backend
         try {
-          const status = await getJobStatus(job.jobId)
-          if (status.status !== job.status || status.progress !== job.progress) {
+          const statusRes = await getJobStatus(job.jobId)
+          if (
+            statusRes.status !== job.status ||
+            statusRes.progress !== job.progress
+          ) {
             updateJob(job.jobId, {
-              status: status.status,
-              progress: status.progress,
-              topicCount: status.result?.topics.length ?? job.topicCount,
-              result: (status.result as ClusteringResult) ?? job.result,
-              error: status.error,
+              status: statusRes.status,
+              progress: statusRes.progress,
+              topicCount: statusRes.result?.topics.length ?? job.topicCount,
+              result: (statusRes.result as ClusteringResult) ?? job.result,
+              error: statusRes.error,
             })
             changed = true
           }
@@ -120,8 +213,50 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
     [refreshJobs]
   )
 
+  // Resume an interrupted mock job: re-run the clustering synchronously
+  // and update the stored job with the result.
+  const handleResumeInterrupted = useCallback(
+    async (job: SavedJob) => {
+      setResumingId(job.jobId)
+      try {
+        updateJob(job.jobId, { status: "clustering", progress: 50 })
+        refreshJobs()
+
+        const result = await runClustering(
+          [], // texts are not stored; we re-use the mock generator
+          job.config.granularity,
+          0
+        )
+
+        updateJob(job.jobId, {
+          status: "completed",
+          progress: 100,
+          result,
+          topicCount: result.topics.length,
+        })
+        refreshJobs()
+
+        // Auto-open
+        const updated = getJob(job.jobId)
+        if (updated) onResumeJob(updated)
+      } catch {
+        updateJob(job.jobId, {
+          status: "failed",
+          error: "Nie udalo sie wznowic przetwarzania",
+        })
+        refreshJobs()
+      } finally {
+        setResumingId(null)
+      }
+    },
+    [refreshJobs, onResumeJob]
+  )
+
   const completedJobs = jobs.filter((j) => j.status === "completed")
-  const activeJobs = jobs.filter((j) => !["completed", "failed"].includes(j.status))
+  const activeJobs = jobs.filter(
+    (j) => !["completed", "failed", "interrupted"].includes(j.status)
+  )
+  const interruptedJobs = jobs.filter((j) => j.status === ("interrupted" as string))
   const failedJobs = jobs.filter((j) => j.status === "failed")
 
   return (
@@ -134,7 +269,8 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
           </h2>
           <p className="text-sm leading-relaxed text-muted-foreground">
             Wyslij nowe zlecenie lub wroc do wczesniejszych przetworzen.
-            Przetwarzanie odbywa sie w tle -- mozesz zamknac okno i wrocic pozniej.
+            Przetwarzanie odbywa sie w tle -- mozesz zamknac okno i wrocic
+            pozniej.
           </p>
         </div>
         <Button
@@ -159,21 +295,34 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
             {activeJobs.map((job) => {
               const cfg = STATUS_CONFIG[job.status] ?? STATUS_CONFIG.queued
               const StatusIcon = cfg.icon
-              const isSpinning = !["completed", "failed"].includes(job.status)
               return (
                 <div
                   key={job.jobId}
                   className="glass-interactive group flex items-center gap-4 rounded-2xl p-5 cursor-default"
                 >
-                  <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-xl", cfg.bgClass)}>
-                    <StatusIcon className={cn("h-4.5 w-4.5", cfg.color, isSpinning && "animate-spin")} />
+                  <div
+                    className={cn(
+                      "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl",
+                      cfg.bgClass
+                    )}
+                  >
+                    <StatusIcon
+                      className={cn("h-4 w-4", cfg.color, "animate-spin")}
+                    />
                   </div>
                   <div className="flex flex-1 flex-col gap-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-foreground truncate">
                         {job.name}
                       </span>
-                      <Badge variant="secondary" className={cn("shrink-0 text-[10px] border-0", cfg.bgClass, cfg.color)}>
+                      <Badge
+                        variant="secondary"
+                        className={cn(
+                          "shrink-0 text-[10px] border-0",
+                          cfg.bgClass,
+                          cfg.color
+                        )}
+                      >
                         {cfg.label}
                       </Badge>
                     </div>
@@ -182,7 +331,6 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                       <span>{job.config.algorithm.toUpperCase()}</span>
                       <span>{timeAgo(job.createdAt)}</span>
                     </div>
-                    {/* Progress bar */}
                     <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">
                       <div
                         className="h-full rounded-full bg-primary/70 transition-all duration-700"
@@ -190,10 +338,78 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                       />
                     </div>
                   </div>
-                  <span className="text-xs font-medium text-primary">{Math.round(job.progress)}%</span>
+                  <span className="text-xs font-medium text-primary">
+                    {Math.round(job.progress)}%
+                  </span>
                 </div>
               )
             })}
+          </div>
+        </section>
+      )}
+
+      {/* Interrupted jobs */}
+      {interruptedJobs.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-chart-3" />
+            <h3 className="text-sm font-semibold text-foreground">
+              Przerwane ({interruptedJobs.length})
+            </h3>
+          </div>
+          <div className="flex flex-col gap-2">
+            {interruptedJobs.map((job) => (
+              <div
+                key={job.jobId}
+                className="glass-interactive group flex items-center gap-4 rounded-2xl p-5"
+              >
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-chart-3/10">
+                  <Clock className="h-4 w-4 text-chart-3" />
+                </div>
+                <div className="flex flex-1 flex-col gap-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-foreground truncate">
+                      {job.name}
+                    </span>
+                    <Badge
+                      variant="secondary"
+                      className="shrink-0 text-[10px] border-0 bg-chart-3/10 text-chart-3"
+                    >
+                      Przerwano
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span>{job.textCount} dok.</span>
+                    <span>{job.config.algorithm.toUpperCase()}</span>
+                    <span>{timeAgo(job.updatedAt)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={resumingId === job.jobId}
+                    onClick={() => handleResumeInterrupted(job)}
+                    className="gap-1.5 text-xs text-chart-3 hover:text-foreground hover:bg-white/[0.06]"
+                  >
+                    {resumingId === job.jobId ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Play className="h-3 w-3" />
+                    )}
+                    Wznow
+                  </Button>
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={(e) => handleDelete(job.jobId, e)}
+                    aria-label="Usun"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}
@@ -214,10 +430,10 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                   type="button"
                   key={job.jobId}
                   onClick={() => onResumeJob(job)}
-                  className="glass-interactive group flex items-center gap-4 rounded-2xl p-5 text-left transition-all hover:border-primary/20 hover:glow-primary"
+                  className="glass-interactive group flex items-center gap-4 rounded-2xl p-5 text-left transition-all hover:border-primary/20"
                 >
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent/10">
-                    <CheckCircle2 className="h-4.5 w-4.5 text-accent" />
+                    <CheckCircle2 className="h-4 w-4 text-accent" />
                   </div>
                   <div className="flex flex-1 flex-col gap-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -225,7 +441,10 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                         {job.name}
                       </span>
                       {job.topicCount && (
-                        <Badge variant="secondary" className="shrink-0 bg-white/[0.06] text-[10px] text-muted-foreground border-0">
+                        <Badge
+                          variant="secondary"
+                          className="shrink-0 bg-white/[0.06] text-[10px] text-muted-foreground border-0"
+                        >
                           {job.topicCount} kategorii
                         </Badge>
                       )}
@@ -246,7 +465,11 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                       className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                       onClick={(e) => handleDelete(job.jobId, e)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") handleDelete(job.jobId, e as unknown as React.MouseEvent)
+                        if (e.key === "Enter")
+                          handleDelete(
+                            job.jobId,
+                            e as unknown as React.MouseEvent
+                          )
                       }}
                       aria-label="Usun"
                     >
@@ -277,12 +500,18 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                 className="glass flex items-center gap-4 rounded-2xl border-destructive/10 p-5"
               >
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-destructive/10">
-                  <AlertTriangle className="h-4.5 w-4.5 text-destructive" />
+                  <AlertTriangle className="h-4 w-4 text-destructive" />
                 </div>
                 <div className="flex flex-1 flex-col gap-1 min-w-0">
-                  <span className="text-sm font-medium text-foreground truncate">{job.name}</span>
-                  <p className="text-xs text-destructive/80 truncate">{job.error ?? "Nieznany blad"}</p>
-                  <span className="text-xs text-muted-foreground">{timeAgo(job.updatedAt)}</span>
+                  <span className="text-sm font-medium text-foreground truncate">
+                    {job.name}
+                  </span>
+                  <p className="text-xs text-destructive/80 truncate">
+                    {job.error ?? "Nieznany blad"}
+                  </p>
+                  <span className="text-xs text-muted-foreground">
+                    {timeAgo(job.updatedAt)}
+                  </span>
                 </div>
                 <button
                   type="button"
@@ -310,7 +539,8 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
             </p>
             <p className="text-sm leading-relaxed text-muted-foreground">
               Rozpocznij nowa analize, aby wykryc tematy w swoich dokumentach.
-              Przetwarzania sa kolejkowane i mozesz do nich wracac w dowolnym momencie.
+              Przetwarzania sa kolejkowane i mozesz do nich wracac w dowolnym
+              momencie.
             </p>
           </div>
           <Button
