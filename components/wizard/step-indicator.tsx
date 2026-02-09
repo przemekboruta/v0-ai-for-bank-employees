@@ -39,19 +39,19 @@ export function StepIndicator({ currentStep }: StepIndicatorProps) {
             <div className="flex items-center gap-2">
               <div
                 className={cn(
-                  "flex h-9 w-9 items-center justify-center rounded-lg transition-all",
-                  isActive && "bg-primary text-primary-foreground shadow-sm",
-                  isDone && "bg-primary/15 text-primary",
-                  !isActive && !isDone && "bg-muted text-muted-foreground"
+                  "flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-300",
+                  isActive && "bg-primary/20 text-primary glow-primary",
+                  isDone && "bg-white/[0.08] text-accent",
+                  !isActive && !isDone && "bg-white/[0.04] text-muted-foreground"
                 )}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-3.5 w-3.5" />
               </div>
               <span
                 className={cn(
-                  "hidden text-sm font-medium md:block",
+                  "hidden text-xs font-medium md:block transition-colors duration-300",
                   isActive && "text-foreground",
-                  isDone && "text-primary",
+                  isDone && "text-accent",
                   !isActive && !isDone && "text-muted-foreground"
                 )}
               >
@@ -61,8 +61,8 @@ export function StepIndicator({ currentStep }: StepIndicatorProps) {
             {idx < STEPS.length - 1 && (
               <div
                 className={cn(
-                  "mx-3 h-px w-6 lg:w-10",
-                  idx < currentIndex ? "bg-primary/40" : "bg-border"
+                  "mx-2 h-px w-4 lg:w-8 transition-colors duration-500",
+                  idx < currentIndex ? "bg-accent/40" : "bg-white/[0.06]"
                 )}
               />
             )}

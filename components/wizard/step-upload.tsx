@@ -3,7 +3,6 @@
 import React from "react"
 
 import { useCallback, useState } from "react"
-import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Upload, FileText, X, Database } from "lucide-react"
 import { generateSampleTexts } from "@/lib/mock-clustering"
@@ -68,92 +67,81 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
       </div>
 
       {!fileName ? (
-        <Card
-          className={`border-2 border-dashed transition-colors ${
+        <div
+          onDrop={handleDrop}
+          onDragOver={(e) => {
+            e.preventDefault()
+            setIsDragging(true)
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          className={`glass-interactive flex cursor-pointer flex-col items-center gap-5 rounded-2xl px-8 py-16 transition-all ${
             isDragging
-              ? "border-primary bg-primary/5"
-              : "border-border hover:border-primary/40"
+              ? "border-primary/30 bg-primary/[0.06] glow-primary"
+              : ""
           }`}
         >
-          <CardContent className="p-0">
-            <div
-              onDrop={handleDrop}
-              onDragOver={(e) => {
-                e.preventDefault()
-                setIsDragging(true)
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/15 glow-primary">
+            <Upload className="h-7 w-7 text-primary" />
+          </div>
+          <div className="flex flex-col items-center gap-1.5 text-center">
+            <p className="text-sm font-medium text-foreground">
+              Przeciagnij plik tutaj
+            </p>
+            <p className="text-xs text-muted-foreground">
+              CSV, TXT (max 10MB)
+            </p>
+          </div>
+          <label className="cursor-pointer">
+            <input
+              type="file"
+              accept=".csv,.txt,.tsv"
+              className="sr-only"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) handleFile(file)
               }}
-              onDragLeave={() => setIsDragging(false)}
-              className="flex flex-col items-center gap-4 py-16"
-            >
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10">
-                <Upload className="h-6 w-6 text-primary" />
-              </div>
-              <div className="flex flex-col items-center gap-1">
-                <p className="text-sm font-medium text-foreground">
-                  Przeciagnij plik tutaj
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  CSV, TXT (max 10MB)
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="cursor-pointer">
-                  <input
-                    type="file"
-                    accept=".csv,.txt,.tsv"
-                    className="sr-only"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) handleFile(file)
-                    }}
-                  />
-                  <span className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-                    Wybierz plik
-                  </span>
-                </label>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            />
+            <span className="inline-flex h-9 items-center rounded-xl bg-primary/90 px-5 text-sm font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:bg-primary hover:shadow-xl hover:shadow-primary/30">
+              Wybierz plik
+            </span>
+          </label>
+        </div>
       ) : (
-        <Card>
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                  <FileText className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-foreground">
-                    {fileName}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {loadedCount} tekstow zaladowanych
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={clearFile}
-                aria-label="Usun plik"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+        <div className="glass flex items-center justify-between rounded-2xl p-5">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15 glow-accent">
+              <FileText className="h-5 w-5 text-accent" />
             </div>
-          </CardContent>
-        </Card>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {fileName}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {loadedCount} tekstow zaladowanych
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={clearFile}
+            aria-label="Usun plik"
+            className="text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       )}
 
       <div className="relative flex items-center gap-4">
-        <div className="h-px flex-1 bg-border" />
+        <div className="h-px flex-1 bg-white/[0.06]" />
         <span className="text-xs font-medium text-muted-foreground">lub</span>
-        <div className="h-px flex-1 bg-border" />
+        <div className="h-px flex-1 bg-white/[0.06]" />
       </div>
 
       <Button
         variant="outline"
-        className="gap-2 bg-transparent"
+        className="gap-2 rounded-xl border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
         onClick={handleDemoData}
       >
         <Database className="h-4 w-4" />

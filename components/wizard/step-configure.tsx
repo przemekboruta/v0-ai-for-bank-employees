@@ -2,7 +2,6 @@
 
 import React from "react"
 
-import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import type { Granularity } from "@/lib/clustering-types"
 import { Layers, LayoutGrid, Grid3X3 } from "lucide-react"
@@ -68,13 +67,11 @@ export function StepConfigure({
           const Icon = opt.icon
           const selected = granularity === opt.value
           return (
-            <Card
+            <div
               key={opt.value}
               className={cn(
-                "cursor-pointer transition-all hover:shadow-md",
-                selected
-                  ? "border-primary bg-primary/[0.03] ring-1 ring-primary/20"
-                  : "hover:border-primary/30"
+                "glass-interactive flex cursor-pointer items-center gap-4 rounded-2xl p-5",
+                selected && "border-primary/25 bg-primary/[0.06] glow-primary"
               )}
               onClick={() => onGranularityChange(opt.value)}
               role="radio"
@@ -87,39 +84,37 @@ export function StepConfigure({
                 }
               }}
             >
-              <CardContent className="flex items-center gap-4 p-5">
-                <div
-                  className={cn(
-                    "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl transition-colors",
-                    selected
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground"
-                  )}
-                >
-                  <Icon className="h-5 w-5" />
+              <div
+                className={cn(
+                  "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl transition-all duration-300",
+                  selected
+                    ? "bg-primary/20 text-primary glow-primary"
+                    : "bg-white/[0.06] text-muted-foreground"
+                )}
+              >
+                <Icon className="h-5 w-5" />
+              </div>
+              <div className="flex flex-1 flex-col gap-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-foreground">
+                    {opt.label}
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors duration-300",
+                      selected
+                        ? "bg-primary/15 text-primary"
+                        : "bg-white/[0.06] text-muted-foreground"
+                    )}
+                  >
+                    {opt.example}
+                  </span>
                 </div>
-                <div className="flex flex-1 flex-col gap-0.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-foreground">
-                      {opt.label}
-                    </span>
-                    <span
-                      className={cn(
-                        "rounded-full px-2.5 py-0.5 text-xs font-medium",
-                        selected
-                          ? "bg-primary/10 text-primary"
-                          : "bg-muted text-muted-foreground"
-                      )}
-                    >
-                      {opt.example}
-                    </span>
-                  </div>
-                  <p className="text-sm leading-relaxed text-muted-foreground">
-                    {opt.description}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {opt.description}
+                </p>
+              </div>
+            </div>
           )
         })}
       </div>

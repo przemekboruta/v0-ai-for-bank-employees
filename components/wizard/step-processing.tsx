@@ -77,9 +77,9 @@ export function StepProcessing({ onComplete }: StepProcessingProps) {
         </p>
       </div>
 
-      <div className="w-full">
-        <Progress value={progress} className="h-2" />
-        <p className="mt-2 text-right text-xs font-medium text-muted-foreground">
+      <div className="glass w-full rounded-2xl p-6">
+        <Progress value={progress} className="h-1.5 bg-white/[0.06]" />
+        <p className="mt-3 text-right text-xs font-medium text-primary">
           {Math.round(progress)}%
         </p>
       </div>
@@ -94,26 +94,26 @@ export function StepProcessing({ onComplete }: StepProcessingProps) {
             <div
               key={step.label}
               className={cn(
-                "flex items-center gap-4 rounded-lg border p-4 transition-all",
-                isActive && "border-primary/30 bg-primary/[0.03]",
-                isDone && "border-border bg-card opacity-60",
-                !isActive && !isDone && "border-border bg-card opacity-30"
+                "flex items-center gap-4 rounded-xl p-4 transition-all duration-500",
+                isActive && "glass border-primary/20 glow-primary",
+                isDone && "glass-subtle opacity-50",
+                !isActive && !isDone && "bg-white/[0.02] border border-white/[0.04] opacity-25"
               )}
             >
               <div
                 className={cn(
-                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
-                  isActive && "bg-primary text-primary-foreground",
-                  isDone && "bg-primary/15 text-primary",
-                  !isActive && !isDone && "bg-muted text-muted-foreground"
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-500",
+                  isActive && "bg-primary/20 text-primary",
+                  isDone && "bg-accent/15 text-accent",
+                  !isActive && !isDone && "bg-white/[0.04] text-muted-foreground"
                 )}
               >
                 <Icon className={cn("h-4 w-4", isActive && "animate-pulse")} />
               </div>
-              <div>
+              <div className="flex-1">
                 <p
                   className={cn(
-                    "text-sm font-medium",
+                    "text-sm font-medium transition-colors duration-300",
                     isActive ? "text-foreground" : "text-muted-foreground"
                   )}
                 >
@@ -122,9 +122,9 @@ export function StepProcessing({ onComplete }: StepProcessingProps) {
                 <p className="text-xs text-muted-foreground">{step.detail}</p>
               </div>
               {isDone && (
-                <div className="ml-auto text-xs font-medium text-primary">
+                <span className="text-xs font-medium text-accent">
                   Gotowe
-                </div>
+                </span>
               )}
             </div>
           )

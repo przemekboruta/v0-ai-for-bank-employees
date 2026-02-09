@@ -14,7 +14,7 @@ import type {
   ClusteringResult,
 } from "@/lib/clustering-types"
 import { generateMockClustering } from "@/lib/mock-clustering"
-import { ArrowLeft, ArrowRight, RotateCcw, Layers3 } from "lucide-react"
+import { ArrowLeft, ArrowRight, RotateCcw, Sparkles } from "lucide-react"
 
 const STEP_ORDER: WizardStep[] = [
   "upload",
@@ -81,19 +81,29 @@ export default function HomePage() {
     currentStep === "review"
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="relative flex min-h-screen flex-col overflow-hidden">
+      {/* Mesh gradient background */}
+      <div className="mesh-gradient pointer-events-none fixed inset-0 z-0" />
+
+      {/* Floating ambient orbs */}
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/[0.07] blur-[100px]" />
+        <div className="absolute -bottom-48 -right-48 h-[500px] w-[500px] rounded-full bg-accent/[0.05] blur-[120px]" />
+        <div className="absolute left-1/2 top-1/3 h-64 w-64 -translate-x-1/2 rounded-full bg-chart-4/[0.04] blur-[80px]" />
+      </div>
+
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b bg-card/80 backdrop-blur-sm">
+      <header className="glass-subtle sticky top-0 z-30">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-8">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
-              <Layers3 className="h-5 w-5 text-primary-foreground" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/20 glow-primary">
+              <Sparkles className="h-4 w-4 text-primary" />
             </div>
             <div>
-              <h1 className="font-display text-base font-bold tracking-tight text-foreground">
+              <h1 className="font-display text-sm font-bold tracking-tight text-foreground">
                 Topic Discovery Hub
               </h1>
-              <p className="hidden text-xs text-muted-foreground sm:block">
+              <p className="hidden text-[11px] text-muted-foreground sm:block">
                 Automatyczne wykrywanie kategorii tematycznych
               </p>
             </div>
@@ -103,7 +113,7 @@ export default function HomePage() {
       </header>
 
       {/* Main Content */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 lg:px-8">
+      <main className="relative z-10 mx-auto w-full max-w-7xl flex-1 px-4 py-8 lg:px-8">
         {currentStep === "upload" && (
           <StepUpload onTextsLoaded={setTexts} loadedCount={texts.length} />
         )}
@@ -134,11 +144,11 @@ export default function HomePage() {
 
       {/* Bottom Navigation */}
       {currentStep !== "processing" && (
-        <footer className="sticky bottom-0 border-t bg-card/80 backdrop-blur-sm">
+        <footer className="glass-subtle sticky bottom-0 z-30">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-8">
             <div className="flex items-center gap-2">
               {currentIndex > 0 && currentStep !== "explore" && (
-                <Button variant="ghost" onClick={goBack} className="gap-2">
+                <Button variant="ghost" onClick={goBack} className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]">
                   <ArrowLeft className="h-4 w-4" />
                   Wstecz
                 </Button>
@@ -147,7 +157,7 @@ export default function HomePage() {
                 <Button
                   variant="ghost"
                   onClick={handleRestart}
-                  className="gap-2"
+                  className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
                 >
                   <RotateCcw className="h-4 w-4" />
                   Nowa analiza
@@ -160,14 +170,14 @@ export default function HomePage() {
                 <Button
                   variant="outline"
                   onClick={handleRecluster}
-                  className="gap-2 bg-transparent"
+                  className="gap-2 border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
                 >
                   <RotateCcw className="h-4 w-4" />
                   Klasteryzuj ponownie
                 </Button>
               )}
               {canGoNext && (
-                <Button onClick={goNext} className="gap-2">
+                <Button onClick={goNext} className="gap-2 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary">
                   {currentStep === "configure" ? "Analizuj" : "Dalej"}
                   <ArrowRight className="h-4 w-4" />
                 </Button>

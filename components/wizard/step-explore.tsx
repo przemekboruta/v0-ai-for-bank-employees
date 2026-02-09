@@ -1,7 +1,6 @@
 "use client"
 
 import { useState } from "react"
-import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -25,7 +24,7 @@ interface StepExploreProps {
 
 export function StepExplore({ result }: StepExploreProps) {
   const [selectedTopicId, setSelectedTopicId] = useState<number | null>(null)
-  const [hoveredDoc, setHoveredDoc] = useState<DocumentItem | null>(null)
+  const [, setHoveredDoc] = useState<DocumentItem | null>(null)
 
   const filteredDocs = selectedTopicId !== null
     ? result.documents.filter((d) => d.clusterId === selectedTopicId)
@@ -66,14 +65,19 @@ export function StepExplore({ result }: StepExploreProps) {
               <span>
                 {" / "}
                 Filtr:{" "}
-                <span className="font-medium text-foreground">
+                <span className="font-medium text-primary">
                   {selectedTopic.label}
                 </span>
               </span>
             )}
           </p>
         </div>
-        <Button variant="outline" size="sm" className="gap-2 bg-transparent" onClick={handleExport}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-2 rounded-xl border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
+          onClick={handleExport}
+        >
           <Download className="h-4 w-4" />
           Eksport CSV
         </Button>
@@ -85,10 +89,10 @@ export function StepExplore({ result }: StepExploreProps) {
           type="button"
           onClick={() => setSelectedTopicId(null)}
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
+            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-300",
             selectedTopicId === null
-              ? "border-primary bg-primary/10 text-primary"
-              : "border-border bg-card text-muted-foreground hover:border-primary/30"
+              ? "border-primary/30 bg-primary/15 text-primary glow-primary"
+              : "border-white/[0.08] bg-white/[0.03] text-muted-foreground hover:border-white/[0.15] hover:bg-white/[0.06]"
           )}
         >
           Wszystkie
@@ -104,10 +108,10 @@ export function StepExplore({ result }: StepExploreProps) {
               )
             }
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-300",
               selectedTopicId === topic.id
-                ? "border-primary/40 bg-primary/10 text-foreground"
-                : "border-border bg-card text-muted-foreground hover:border-primary/30"
+                ? "border-white/[0.15] bg-white/[0.08] text-foreground"
+                : "border-white/[0.06] bg-white/[0.02] text-muted-foreground hover:border-white/[0.12] hover:bg-white/[0.05]"
             )}
           >
             <span
@@ -115,22 +119,22 @@ export function StepExplore({ result }: StepExploreProps) {
               style={{ backgroundColor: topic.color }}
             />
             {topic.label}
-            <span className="opacity-60">({topic.documentCount})</span>
+            <span className="opacity-50">({topic.documentCount})</span>
           </button>
         ))}
       </div>
 
       <Tabs defaultValue="map" className="w-full">
-        <TabsList>
-          <TabsTrigger value="map" className="gap-1.5">
+        <TabsList className="glass-subtle border-white/[0.06] bg-white/[0.03]">
+          <TabsTrigger value="map" className="gap-1.5 data-[state=active]:bg-white/[0.08] data-[state=active]:text-foreground">
             <Map className="h-3.5 w-3.5" />
             Mapa
           </TabsTrigger>
-          <TabsTrigger value="table" className="gap-1.5">
+          <TabsTrigger value="table" className="gap-1.5 data-[state=active]:bg-white/[0.08] data-[state=active]:text-foreground">
             <TableIcon className="h-3.5 w-3.5" />
             Tabela
           </TabsTrigger>
-          <TabsTrigger value="stats" className="gap-1.5">
+          <TabsTrigger value="stats" className="gap-1.5 data-[state=active]:bg-white/[0.08] data-[state=active]:text-foreground">
             <BarChart3 className="h-3.5 w-3.5" />
             Statystyki
           </TabsTrigger>
@@ -146,68 +150,66 @@ export function StepExplore({ result }: StepExploreProps) {
         </TabsContent>
 
         <TabsContent value="table" className="mt-4">
-          <Card>
-            <CardContent className="p-0">
-              <ScrollArea className="h-[460px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-16">Nr</TableHead>
-                      <TableHead>Tekst</TableHead>
-                      <TableHead className="w-48">Kategoria</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredDocs.slice(0, 50).map((doc, idx) => {
-                      const topic = result.topics.find(
-                        (t) => t.id === doc.clusterId
-                      )
-                      return (
-                        <TableRow key={doc.id}>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {idx + 1}
-                          </TableCell>
-                          <TableCell className="max-w-md text-sm">
-                            {doc.text.length > 100
-                              ? `${doc.text.substring(0, 100)}...`
-                              : doc.text}
-                          </TableCell>
-                          <TableCell>
-                            {topic && (
-                              <Badge
-                                variant="secondary"
-                                className="gap-1.5"
-                              >
-                                <span
-                                  className="h-2 w-2 rounded-full"
-                                  style={{
-                                    backgroundColor: topic.color,
-                                  }}
-                                />
-                                {topic.label.length > 20
-                                  ? `${topic.label.substring(0, 18)}...`
-                                  : topic.label}
-                              </Badge>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </ScrollArea>
-            </CardContent>
-          </Card>
+          <div className="glass overflow-hidden rounded-2xl">
+            <ScrollArea className="h-[460px]">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-white/[0.06] hover:bg-transparent">
+                    <TableHead className="w-16 text-muted-foreground">Nr</TableHead>
+                    <TableHead className="text-muted-foreground">Tekst</TableHead>
+                    <TableHead className="w-48 text-muted-foreground">Kategoria</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredDocs.slice(0, 50).map((doc, idx) => {
+                    const topic = result.topics.find(
+                      (t) => t.id === doc.clusterId
+                    )
+                    return (
+                      <TableRow key={doc.id} className="border-white/[0.04] hover:bg-white/[0.03]">
+                        <TableCell className="text-xs text-muted-foreground">
+                          {idx + 1}
+                        </TableCell>
+                        <TableCell className="max-w-md text-sm text-foreground/80">
+                          {doc.text.length > 100
+                            ? `${doc.text.substring(0, 100)}...`
+                            : doc.text}
+                        </TableCell>
+                        <TableCell>
+                          {topic && (
+                            <Badge
+                              variant="secondary"
+                              className="gap-1.5 border-0 bg-white/[0.06] text-foreground/70"
+                            >
+                              <span
+                                className="h-2 w-2 rounded-full"
+                                style={{
+                                  backgroundColor: topic.color,
+                                }}
+                              />
+                              {topic.label.length > 20
+                                ? `${topic.label.substring(0, 18)}...`
+                                : topic.label}
+                            </Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </ScrollArea>
+          </div>
         </TabsContent>
 
         <TabsContent value="stats" className="mt-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {result.topics.map((topic) => (
-              <Card
+              <div
                 key={topic.id}
                 className={cn(
-                  "cursor-pointer transition-all hover:shadow-md",
-                  selectedTopicId === topic.id && "ring-1 ring-primary/30"
+                  "glass-interactive cursor-pointer rounded-2xl p-5",
+                  selectedTopicId === topic.id && "border-white/[0.15] glow-primary"
                 )}
                 onClick={() =>
                   setSelectedTopicId(
@@ -215,7 +217,7 @@ export function StepExplore({ result }: StepExploreProps) {
                   )
                 }
               >
-                <CardContent className="flex flex-col gap-3 p-4">
+                <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-3">
                     <div
                       className="h-3 w-3 rounded-full"
@@ -227,7 +229,7 @@ export function StepExplore({ result }: StepExploreProps) {
                   </div>
                   <div className="flex items-end justify-between">
                     <div>
-                      <p className="text-2xl font-bold text-foreground">
+                      <p className="font-display text-3xl font-bold text-foreground">
                         {topic.documentCount}
                       </p>
                       <p className="text-xs text-muted-foreground">
@@ -235,7 +237,7 @@ export function StepExplore({ result }: StepExploreProps) {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-lg font-semibold text-foreground">
+                      <p className="font-display text-xl font-semibold text-foreground">
                         {Math.round(topic.coherenceScore * 100)}%
                       </p>
                       <p className="text-xs text-muted-foreground">
@@ -243,13 +245,14 @@ export function StepExplore({ result }: StepExploreProps) {
                       </p>
                     </div>
                   </div>
-                  {/* Simple bar visualization */}
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  {/* Glass progress bar */}
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
                     <div
-                      className="h-full rounded-full transition-all"
+                      className="h-full rounded-full transition-all duration-500"
                       style={{
                         width: `${(topic.documentCount / result.totalDocuments) * 100}%`,
                         backgroundColor: topic.color,
+                        boxShadow: `0 0 8px ${topic.color}40`,
                       }}
                     />
                   </div>
@@ -258,14 +261,14 @@ export function StepExplore({ result }: StepExploreProps) {
                       <Badge
                         key={kw}
                         variant="secondary"
-                        className="text-[10px]"
+                        className="bg-white/[0.05] text-[10px] text-muted-foreground border-0"
                       >
                         {kw}
                       </Badge>
                     ))}
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             ))}
           </div>
         </TabsContent>
