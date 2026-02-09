@@ -13,7 +13,7 @@ import type {
   Granularity,
   ClusteringResult,
 } from "@/lib/clustering-types"
-import { generateMockClustering } from "@/lib/mock-clustering"
+import { runClustering } from "@/lib/api-client"
 import { ArrowLeft, ArrowRight, RotateCcw, Sparkles } from "lucide-react"
 
 const STEP_ORDER: WizardStep[] = [
@@ -31,6 +31,7 @@ export default function HomePage() {
   const [clusteringResult, setClusteringResult] =
     useState<ClusteringResult | null>(null)
   const [iterationCount, setIterationCount] = useState(0)
+  const [pipelineError, setPipelineError] = useState<string | null>(null)
 
   const currentIndex = STEP_ORDER.indexOf(currentStep)
 
@@ -52,18 +53,23 @@ export default function HomePage() {
     }
   }, [currentIndex])
 
-  const handleProcessingComplete = useCallback(() => {
-    const result = generateMockClustering(
-      texts,
-      granularity,
-      42 + iterationCount
-    )
-    setClusteringResult(result)
-    setCurrentStep("review")
+  const handleProcessingComplete = useCallback(async () => {
+    try {
+      setPipelineError(null)
+      const result = await runClustering(texts, granularity, iterationCount)
+      setClusteringResult(result)
+      setCurrentStep("review")
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Nieznany blad pipeline'u"
+      setPipelineError(message)
+      setCurrentStep("configure")
+    }
   }, [texts, granularity, iterationCount])
 
   const handleRecluster = useCallback(() => {
     setIterationCount((c) => c + 1)
+    setPipelineError(null)
     setCurrentStep("processing")
   }, [])
 
@@ -73,6 +79,7 @@ export default function HomePage() {
     setGranularity("medium")
     setClusteringResult(null)
     setIterationCount(0)
+    setPipelineError(null)
   }, [])
 
   const canGoNext =
@@ -114,6 +121,18 @@ export default function HomePage() {
 
       {/* Main Content */}
       <main className="relative z-10 mx-auto w-full max-w-7xl flex-1 px-4 py-8 lg:px-8">
+        {/* Pipeline error banner */}
+        {pipelineError && currentStep === "configure" && (
+          <div className="mb-6 rounded-xl border border-destructive/20 bg-destructive/[0.08] px-5 py-4">
+            <p className="text-sm font-medium text-destructive">
+              Blad pipeline&apos;u ML
+            </p>
+            <p className="mt-1 text-xs text-destructive/80">
+              {pipelineError}
+            </p>
+          </div>
+        )}
+
         {currentStep === "upload" && (
           <StepUpload onTextsLoaded={setTexts} loadedCount={texts.length} />
         )}
@@ -138,7 +157,10 @@ export default function HomePage() {
         )}
 
         {currentStep === "explore" && clusteringResult && (
-          <StepExplore result={clusteringResult} onResultUpdate={setClusteringResult} />
+          <StepExplore
+            result={clusteringResult}
+            onResultUpdate={setClusteringResult}
+          />
         )}
       </main>
 
@@ -148,7 +170,11 @@ export default function HomePage() {
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-8">
             <div className="flex items-center gap-2">
               {currentIndex > 0 && currentStep !== "explore" && (
-                <Button variant="ghost" onClick={goBack} className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]">
+                <Button
+                  variant="ghost"
+                  onClick={goBack}
+                  className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+                >
                   <ArrowLeft className="h-4 w-4" />
                   Wstecz
                 </Button>
@@ -177,7 +203,10 @@ export default function HomePage() {
                 </Button>
               )}
               {canGoNext && (
-                <Button onClick={goNext} className="gap-2 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary">
+                <Button
+                  onClick={goNext}
+                  className="gap-2 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary"
+                >
                   {currentStep === "configure" ? "Analizuj" : "Dalej"}
                   <ArrowRight className="h-4 w-4" />
                 </Button>

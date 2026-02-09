@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { ClusteringResult, LLMSuggestion } from "@/lib/clustering-types"
+import { refineClusters, renameTopic as renameTopicApi } from "@/lib/api-client"
 import {
   Sparkles,
   Merge,
@@ -136,10 +137,15 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     setEditingLabel(currentLabel)
   }
 
-  const finishRenaming = () => {
+  const finishRenaming = async () => {
     if (editingTopicId === null || !editingLabel.trim()) {
       setEditingTopicId(null)
       return
+    }
+    try {
+      await renameTopicApi(editingTopicId, editingLabel.trim())
+    } catch {
+      // Continue with local update even if API fails
     }
     const updated = { ...result }
     const topics = updated.topics.map((t) =>
@@ -148,6 +154,32 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     updated.topics = topics
     onResultUpdate(updated)
     setEditingTopicId(null)
+  }
+
+  const [isRefining, setIsRefining] = useState(false)
+
+  const requestMoreSuggestions = async () => {
+    setIsRefining(true)
+    try {
+      const response = await refineClusters(
+        result.topics,
+        result.documents,
+        result.llmSuggestions,
+        ["coherence", "granularity", "naming"]
+      )
+      if (response.suggestions.length > 0) {
+        const updated = { ...result }
+        updated.llmSuggestions = [
+          ...updated.llmSuggestions,
+          ...response.suggestions,
+        ]
+        onResultUpdate(updated)
+      }
+    } catch {
+      // Silently fail -- user can retry
+    } finally {
+      setIsRefining(false)
+    }
   }
 
   const pendingSuggestions = result.llmSuggestions.filter((s) => !s.applied)
@@ -194,6 +226,18 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
             </Button>
           </div>
         )}
+
+        {/* Request more suggestions */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={requestMoreSuggestions}
+          disabled={isRefining}
+          className="gap-1.5 self-start border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
+        >
+          <Sparkles className={cn("h-3.5 w-3.5", isRefining && "animate-spin")} />
+          {isRefining ? "Analizuje..." : "Popros AI o wiecej sugestii"}
+        </Button>
 
         {pendingSuggestions.length === 0 && appliedSuggestions.length === 0 && (
           <div className="glass flex flex-col items-center gap-3 rounded-2xl py-10">

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { ClusteringResult, DocumentItem } from "@/lib/clustering-types"
+import { exportReport, downloadBlob, renameTopic as renameTopicApi } from "@/lib/api-client"
 import { ClusterScatterPlot } from "./cluster-scatter-plot"
 import { DocumentDetailDrawer } from "./document-detail-drawer"
 import {
@@ -62,20 +63,23 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     ? result.topics.find((t) => t.id === selectedDoc.clusterId) ?? null
     : null
 
-  const handleExport = () => {
-    const header = "tekst,kategoria,id_kategorii,koherencja"
-    const rows = result.documents.map((doc) => {
-      const topic = result.topics.find((t) => t.id === doc.clusterId)
-      return `"${doc.text.replace(/"/g, '""')}","${topic?.label ?? ""}",${doc.clusterId},${topic?.coherenceScore ? Math.round(topic.coherenceScore * 100) : ""}`
-    })
-    const csv = [header, ...rows].join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = "klasteryzacja_wyniki.csv"
-    link.click()
-    URL.revokeObjectURL(url)
+  const handleExport = async () => {
+    try {
+      const blob = await exportReport(result, "csv", { language: "pl" })
+      if (blob instanceof Blob) {
+        downloadBlob(blob, "klasteryzacja_wyniki.csv")
+      }
+    } catch {
+      // Fallback: generuj lokalnie
+      const header = "tekst,kategoria,id_kategorii,koherencja"
+      const rows = result.documents.map((doc) => {
+        const topic = result.topics.find((t) => t.id === doc.clusterId)
+        return `"${doc.text.replace(/"/g, '""')}","${topic?.label ?? ""}",${doc.clusterId},${topic?.coherenceScore ? Math.round(topic.coherenceScore * 100) : ""}`
+      })
+      const csv = [header, ...rows].join("\n")
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+      downloadBlob(blob, "klasteryzacja_wyniki.csv")
+    }
   }
 
   const generateReport = () => {
@@ -132,10 +136,16 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     setEditingLabel(currentLabel)
   }
 
-  const finishRenaming = () => {
+  const finishRenaming = async () => {
     if (editingTopicId === null || !editingLabel.trim()) {
       setEditingTopicId(null)
       return
+    }
+    // Wywolaj API (audit log, walidacja)
+    try {
+      await renameTopicApi(editingTopicId, editingLabel.trim())
+    } catch {
+      // Kontynuuj mimo bledu API -- zmiana lokalna wciaz dziala
     }
     const updated = { ...result }
     const topics = updated.topics.map((t) =>
