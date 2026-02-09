@@ -87,6 +87,21 @@ async def submit_cluster_job(req: ClusterRequest):
 
 
 # ================================================================
+# GET /cluster/jobs  --  List all jobs
+# ================================================================
+
+@router.get(
+    "/jobs",
+    summary="List all known jobs",
+    description="Returns a list of all jobs (active and completed) from Redis.",
+)
+async def list_jobs():
+    jobs = JobQueueService.get_instance()
+    all_jobs = await jobs.list_jobs()
+    return {"jobs": all_jobs}
+
+
+# ================================================================
 # GET /cluster/job/{job_id}  --  Poll job status
 # ================================================================
 

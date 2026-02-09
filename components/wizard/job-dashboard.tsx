@@ -1,21 +1,22 @@
 "use client"
 
 import React from "react"
-
-import { useCallback, useEffect, useState, useRef } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { SavedJob, ClusteringResult } from "@/lib/clustering-types"
+import { DEFAULT_CLUSTERING_CONFIG } from "@/lib/clustering-types"
 import {
   listJobs,
   deleteJob,
-  getJobStatus,
+  getJobStatus as fetchJobStatus,
   updateJob,
   getJob,
-  runClustering,
   saveJob,
+  listBackendJobs,
 } from "@/lib/api-client"
+import { generateMockClustering } from "@/lib/mock-clustering"
 import {
   Plus,
   Clock,
@@ -28,6 +29,7 @@ import {
   History,
   Sparkles,
   Play,
+  Server,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -93,6 +95,7 @@ const STATUS_CONFIG: Record<
 function timeAgo(dateStr: string): string {
   const now = Date.now()
   const then = new Date(dateStr).getTime()
+  if (Number.isNaN(then)) return ""
   const diffMs = now - then
   const diffMin = Math.floor(diffMs / 60000)
   if (diffMin < 1) return "przed chwila"
@@ -103,28 +106,26 @@ function timeAgo(dateStr: string): string {
   return `${diffD} dn. temu`
 }
 
+function isMockJob(jobId: string): boolean {
+  return jobId.startsWith("mock-")
+}
+
 /**
- * Check if a mock job is stale (user left the processing screen before
- * it finished). In production, the Python backend + Redis handles this.
- * For mock jobs, we mark them as "interrupted" since no background worker
- * exists to finish them.
+ * Detect stale mock jobs that were abandoned (user left StepProcessing).
+ * Mock jobs have no backend worker, so if they're still "in progress"
+ * and haven't been updated recently, mark them interrupted.
  */
 function fixStaleMockJobs(): boolean {
   let changed = false
   const jobs = listJobs()
   for (const job of jobs) {
     if (
-      job.jobId.startsWith("job-") &&
+      isMockJob(job.jobId) &&
       !["completed", "failed", "interrupted"].includes(job.status)
     ) {
-      // If the job was last updated more than 10 seconds ago and is still
-      // "in progress", it was abandoned when the user left StepProcessing.
       const lastUpdate = new Date(job.updatedAt).getTime()
-      const now = Date.now()
-      if (now - lastUpdate > 10_000) {
-        updateJob(job.jobId, {
-          status: "interrupted" as SavedJob["status"],
-        })
+      if (Date.now() - lastUpdate > 10_000) {
+        updateJob(job.jobId, { status: "interrupted" as SavedJob["status"] })
         changed = true
       }
     }
@@ -132,24 +133,78 @@ function fixStaleMockJobs(): boolean {
   return changed
 }
 
-export function JobDashboard({
-  onNewAnalysis,
-  onResumeJob,
-}: JobDashboardProps) {
+export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) {
   const [jobs, setJobs] = useState<SavedJob[]>([])
   const [resumingId, setResumingId] = useState<string | null>(null)
+  const [isBackendConnected, setIsBackendConnected] = useState(false)
 
-  const refreshJobs = useCallback(() => {
-    setJobs(listJobs())
+  // Merge local sessionStorage jobs with backend Redis jobs
+  const refreshJobs = useCallback(async () => {
+    // 1. Local jobs
+    const localJobs = listJobs()
+
+    // 2. Try fetching backend jobs
+    let backendJobs: SavedJob[] = []
+    try {
+      const rawJobs = await listBackendJobs()
+      if (rawJobs.length > 0) {
+        setIsBackendConnected(true)
+        backendJobs = rawJobs.map((bj) => ({
+          jobId: bj.jobId,
+          name: `Analiza (${bj.textCount} dok.)`,
+          status: bj.status as SavedJob["status"],
+          progress: typeof bj.progress === "number" ? bj.progress : 0,
+          textCount: bj.textCount ?? 0,
+          topicCount: null,
+          config: {
+            ...DEFAULT_CLUSTERING_CONFIG,
+            ...(typeof bj.config === "object" ? bj.config : {}),
+          },
+          createdAt: bj.createdAt ?? new Date().toISOString(),
+          updatedAt: bj.updatedAt ?? new Date().toISOString(),
+          result: null,
+          error: bj.error,
+        }))
+      }
+    } catch {
+      // Backend not available, just use local jobs
+    }
+
+    // 3. Merge: backend jobs override local jobs with same ID,
+    //    but keep local result/topicCount if local has them
+    const merged = new Map<string, SavedJob>()
+    for (const job of localJobs) {
+      merged.set(job.jobId, job)
+    }
+    for (const bj of backendJobs) {
+      const existing = merged.get(bj.jobId)
+      if (existing) {
+        // Keep local result if backend hasn't returned one yet
+        merged.set(bj.jobId, {
+          ...bj,
+          name: existing.name || bj.name,
+          result: existing.result,
+          topicCount: existing.topicCount ?? bj.topicCount,
+        })
+      } else {
+        merged.set(bj.jobId, bj)
+      }
+    }
+
+    // Sort newest first
+    const all = Array.from(merged.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )
+    setJobs(all)
   }, [])
 
-  // Load jobs on mount, fix stale mock jobs
+  // Initial load + fix stale
   useEffect(() => {
     fixStaleMockJobs()
     refreshJobs()
   }, [refreshJobs])
 
-  // Poll in-progress jobs (for production backend mode)
+  // Poll in-progress jobs
   useEffect(() => {
     const inProgress = jobs.filter(
       (j) => !["completed", "failed", "interrupted"].includes(j.status)
@@ -159,43 +214,50 @@ export function JobDashboard({
     const interval = setInterval(async () => {
       let changed = false
       for (const job of inProgress) {
-        // Mock jobs: check local store for updates from StepProcessing
-        if (job.jobId.startsWith("job-")) {
+        if (isMockJob(job.jobId)) {
+          // Mock jobs: check local store, mark stale as interrupted
           const latest = getJob(job.jobId)
           if (latest && latest.status !== job.status) changed = true
-          // If still in progress and stale, mark interrupted
           if (
             latest &&
             !["completed", "failed", "interrupted"].includes(latest.status)
           ) {
             const lastUpdate = new Date(latest.updatedAt).getTime()
             if (Date.now() - lastUpdate > 10_000) {
-              updateJob(job.jobId, {
-                status: "interrupted" as SavedJob["status"],
-              })
+              updateJob(job.jobId, { status: "interrupted" as SavedJob["status"] })
               changed = true
             }
           }
           continue
         }
-        // Production jobs: poll backend
+        // Backend jobs: poll via API
         try {
-          const statusRes = await getJobStatus(job.jobId)
-          if (
-            statusRes.status !== job.status ||
-            statusRes.progress !== job.progress
-          ) {
+          const statusRes = await fetchJobStatus(job.jobId)
+          const newStatus = statusRes.status as SavedJob["status"]
+          if (newStatus !== job.status || statusRes.progress !== job.progress) {
+            const result = (statusRes.result as ClusteringResult | undefined) ?? null
             updateJob(job.jobId, {
-              status: statusRes.status,
-              progress: statusRes.progress,
-              topicCount: statusRes.result?.topics.length ?? job.topicCount,
-              result: (statusRes.result as ClusteringResult) ?? job.result,
+              status: newStatus,
+              progress: statusRes.progress ?? 0,
+              topicCount: result?.topics?.length ?? job.topicCount,
+              result: result ?? job.result,
               error: statusRes.error,
             })
+            // Also save locally so result is available for resume
+            if (newStatus === "completed" && result) {
+              saveJob({
+                ...job,
+                status: "completed",
+                progress: 100,
+                topicCount: result.topics?.length ?? 0,
+                result,
+                updatedAt: new Date().toISOString(),
+              })
+            }
             changed = true
           }
         } catch {
-          // Skip
+          // Network error, skip
         }
       }
       if (changed) refreshJobs()
@@ -213,20 +275,21 @@ export function JobDashboard({
     [refreshJobs]
   )
 
-  // Resume an interrupted mock job: re-run the clustering synchronously
-  // and update the stored job with the result.
+  // Resume interrupted MOCK jobs by generating result locally
   const handleResumeInterrupted = useCallback(
     async (job: SavedJob) => {
       setResumingId(job.jobId)
       try {
-        updateJob(job.jobId, { status: "clustering", progress: 50 })
-        refreshJobs()
+        updateJob(job.jobId, { status: "clustering" as SavedJob["status"], progress: 50 })
+        await refreshJobs()
 
-        const result = await runClustering(
-          [], // texts are not stored; we re-use the mock generator
+        // Generate result locally -- never call API for mock jobs
+        const result = generateMockClustering(
+          Array.from({ length: job.textCount }, (_, i) => `Dokument ${i + 1}`),
           job.config.granularity,
-          0
+          Date.now()
         )
+        result.jobId = job.jobId
 
         updateJob(job.jobId, {
           status: "completed",
@@ -234,14 +297,13 @@ export function JobDashboard({
           result,
           topicCount: result.topics.length,
         })
-        refreshJobs()
+        await refreshJobs()
 
-        // Auto-open
         const updated = getJob(job.jobId)
         if (updated) onResumeJob(updated)
       } catch {
         updateJob(job.jobId, {
-          status: "failed",
+          status: "failed" as SavedJob["status"],
           error: "Nie udalo sie wznowic przetwarzania",
         })
         refreshJobs()
@@ -256,7 +318,7 @@ export function JobDashboard({
   const activeJobs = jobs.filter(
     (j) => !["completed", "failed", "interrupted"].includes(j.status)
   )
-  const interruptedJobs = jobs.filter((j) => j.status === ("interrupted" as string))
+  const interruptedJobs = jobs.filter((j) => j.status === "interrupted")
   const failedJobs = jobs.filter((j) => j.status === "failed")
 
   return (
@@ -269,8 +331,12 @@ export function JobDashboard({
           </h2>
           <p className="text-sm leading-relaxed text-muted-foreground">
             Wyslij nowe zlecenie lub wroc do wczesniejszych przetworzen.
-            Przetwarzanie odbywa sie w tle -- mozesz zamknac okno i wrocic
-            pozniej.
+            {isBackendConnected && (
+              <span className="ml-2 inline-flex items-center gap-1 text-accent">
+                <Server className="inline h-3 w-3" />
+                Backend polaczony
+              </span>
+            )}
           </p>
         </div>
         <Button
@@ -282,7 +348,7 @@ export function JobDashboard({
         </Button>
       </div>
 
-      {/* Active jobs (in progress) */}
+      {/* Active jobs */}
       {activeJobs.length > 0 && (
         <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
@@ -306,9 +372,7 @@ export function JobDashboard({
                       cfg.bgClass
                     )}
                   >
-                    <StatusIcon
-                      className={cn("h-4 w-4", cfg.color, "animate-spin")}
-                    />
+                    <StatusIcon className={cn("h-4 w-4", cfg.color, "animate-spin")} />
                   </div>
                   <div className="flex flex-1 flex-col gap-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -317,18 +381,20 @@ export function JobDashboard({
                       </span>
                       <Badge
                         variant="secondary"
-                        className={cn(
-                          "shrink-0 text-[10px] border-0",
-                          cfg.bgClass,
-                          cfg.color
-                        )}
+                        className={cn("shrink-0 text-[10px] border-0", cfg.bgClass, cfg.color)}
                       >
                         {cfg.label}
                       </Badge>
+                      {!isMockJob(job.jobId) && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px] border-0 bg-accent/10 text-accent">
+                          <Server className="mr-0.5 h-2.5 w-2.5" />
+                          Serwer
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span>{job.textCount} dok.</span>
-                      <span>{job.config.algorithm.toUpperCase()}</span>
+                      <span>{job.config?.algorithm?.toUpperCase() ?? "HDBSCAN"}</span>
                       <span>{timeAgo(job.createdAt)}</span>
                     </div>
                     <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">
@@ -380,7 +446,7 @@ export function JobDashboard({
                   </div>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <span>{job.textCount} dok.</span>
-                    <span>{job.config.algorithm.toUpperCase()}</span>
+                    <span>{job.config?.algorithm?.toUpperCase() ?? "HDBSCAN"}</span>
                     <span>{timeAgo(job.updatedAt)}</span>
                   </div>
                 </div>
@@ -440,7 +506,7 @@ export function JobDashboard({
                       <span className="text-sm font-medium text-foreground truncate">
                         {job.name}
                       </span>
-                      {job.topicCount && (
+                      {job.topicCount != null && (
                         <Badge
                           variant="secondary"
                           className="shrink-0 bg-white/[0.06] text-[10px] text-muted-foreground border-0"
@@ -448,11 +514,17 @@ export function JobDashboard({
                           {job.topicCount} kategorii
                         </Badge>
                       )}
+                      {!isMockJob(job.jobId) && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px] border-0 bg-accent/10 text-accent">
+                          <Server className="mr-0.5 h-2.5 w-2.5" />
+                          Serwer
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span>{job.textCount} dok.</span>
-                      <span>{job.config.algorithm.toUpperCase()}</span>
-                      {job.config.dimReduction !== "none" && (
+                      <span>{job.config?.algorithm?.toUpperCase() ?? "HDBSCAN"}</span>
+                      {job.config?.dimReduction && job.config.dimReduction !== "none" && (
                         <span>{job.config.dimReduction.toUpperCase()}</span>
                       )}
                       <span>{timeAgo(job.updatedAt)}</span>
@@ -466,10 +538,7 @@ export function JobDashboard({
                       onClick={(e) => handleDelete(job.jobId, e)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter")
-                          handleDelete(
-                            job.jobId,
-                            e as unknown as React.MouseEvent
-                          )
+                          handleDelete(job.jobId, e as unknown as React.MouseEvent)
                       }}
                       aria-label="Usun"
                     >
@@ -509,9 +578,7 @@ export function JobDashboard({
                   <p className="text-xs text-destructive/80 truncate">
                     {job.error ?? "Nieznany blad"}
                   </p>
-                  <span className="text-xs text-muted-foreground">
-                    {timeAgo(job.updatedAt)}
-                  </span>
+                  <span className="text-xs text-muted-foreground">{timeAgo(job.updatedAt)}</span>
                 </div>
                 <button
                   type="button"
@@ -534,13 +601,10 @@ export function JobDashboard({
             <History className="h-7 w-7 text-primary/60" />
           </div>
           <div className="flex flex-col gap-1.5">
-            <p className="text-sm font-medium text-foreground">
-              Brak przetworzen
-            </p>
+            <p className="text-sm font-medium text-foreground">Brak przetworzen</p>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Rozpocznij nowa analize, aby wykryc tematy w swoich dokumentach.
-              Przetwarzania sa kolejkowane i mozesz do nich wracac w dowolnym
-              momencie.
+              Rozpocznij nowa analize, aby wykryc tematy w swoich dokumentach. Przetwarzania sa
+              kolejkowane i mozesz do nich wracac w dowolnym momencie.
             </p>
           </div>
           <Button
@@ -559,7 +623,7 @@ export function JobDashboard({
           <Button
             variant="ghost"
             size="sm"
-            onClick={refreshJobs}
+            onClick={() => refreshJobs()}
             className="gap-2 text-xs text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
           >
             <RefreshCw className="h-3 w-3" />
