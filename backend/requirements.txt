@@ -1,0 +1,26 @@
+# Topic Discovery Hub - Python Backend
+# Install: pip install -r requirements.txt
+
+# === Web Framework ===
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.18
+
+# === ML Pipeline ===
+torch>=2.1.0
+transformers>=4.40.0        # ModernBERT support
+sentence-transformers>=3.0.0
+umap-learn>=0.5.5
+hdbscan>=0.8.33
+scikit-learn>=1.4.0
+
+# === Data Processing ===
+numpy>=1.26.0
+pandas>=2.2.0
+
+# === LLM ===
+openai>=1.50.0
+
+# === Utilities ===
+pydantic>=2.6.0
+python-dotenv>=1.0.0
