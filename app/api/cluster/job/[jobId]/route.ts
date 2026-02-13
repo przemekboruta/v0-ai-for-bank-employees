@@ -43,3 +43,30 @@ export async function GET(
     // The frontend mock pipeline doesn't actually poll this endpoint
   })
 }
+
+/**
+ * DELETE /api/cluster/job/:jobId
+ *
+ * Delete a job and all associated data.
+ * - PYTHON_BACKEND_URL -> proxy to FastAPI (real Redis deletion)
+ * - brak -> mock: delete from sessionStorage
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ jobId: string }> }
+) {
+  const { jobId } = await params
+
+  // === PRODUCTION: proxy ===
+  if (isPythonBackendEnabled()) {
+    return proxyToBackend(`/api/cluster/job/${jobId}`, { method: "DELETE" })
+  }
+
+  // === MOCK: delete from sessionStorage ===
+  // Note: This is handled client-side in deleteJob() function
+  // But we return success here for consistency
+  return NextResponse.json({
+    jobId,
+    deleted: true,
+  })
+}

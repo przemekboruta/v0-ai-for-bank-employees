@@ -71,12 +71,13 @@ export interface ClusterTopic {
 }
 
 export interface LLMSuggestion {
-  type: "merge" | "split" | "rename" | "reclassify"
+  type: "merge" | "rename" | "reclassify"
   description: string
   targetClusterIds: number[]
   suggestedLabel?: string
   confidence: number
   applied: boolean
+  blocked?: boolean // True if suggestion conflicts with an applied suggestion
 }
 
 export interface ClusteringResult {

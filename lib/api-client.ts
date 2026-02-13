@@ -208,11 +208,12 @@ interface RenameResponse {
 
 export async function renameTopic(
   topicId: number,
-  newLabel: string
+  newLabel: string,
+  jobId?: string
 ): Promise<RenameResponse> {
   return apiRequest<RenameResponse>("/api/cluster/rename", {
     method: "PATCH",
-    body: JSON.stringify({ topicId, newLabel }),
+    body: JSON.stringify({ topicId, newLabel, jobId }),
   })
 }
 
@@ -231,34 +232,12 @@ export async function mergeClusters(
   clusterIds: number[],
   newLabel: string,
   documents: DocumentItem[],
-  topics: ClusterTopic[]
+  topics: ClusterTopic[],
+  jobId?: string
 ): Promise<MergeResponse> {
   return apiRequest<MergeResponse>("/api/cluster/merge", {
     method: "POST",
-    body: JSON.stringify({ clusterIds, newLabel, documents, topics }),
-  })
-}
-
-// ===== Split =====
-
-interface SplitResponse extends ClusteringResult {
-  splitInfo: {
-    originalClusterId: number
-    newClusterIds: number[]
-    numSubclusters: number
-    documentsAffected: number
-  }
-}
-
-export async function splitCluster(
-  clusterId: number,
-  numSubclusters: number,
-  documents: DocumentItem[],
-  topics: ClusterTopic[]
-): Promise<SplitResponse> {
-  return apiRequest<SplitResponse>("/api/cluster/split", {
-    method: "POST",
-    body: JSON.stringify({ clusterId, numSubclusters, documents, topics }),
+    body: JSON.stringify({ clusterIds, newLabel, documents, topics, jobId }),
   })
 }
 
@@ -266,23 +245,23 @@ export async function splitCluster(
 
 interface ReclassifyResponse extends ClusteringResult {
   reclassifyInfo: {
-    documentIds: string[]
-    fromClusterId: number
-    toClusterId: number
+    fromClusterIds: number[]
+    numClusters: number
+    newClusterIds: number[]
     documentsAffected: number
   }
 }
 
 export async function reclassifyDocuments(
-  documentIds: string[],
-  fromClusterId: number,
-  toClusterId: number,
+  fromClusterIds: number[],
+  numClusters: number,
   documents: DocumentItem[],
-  topics: ClusterTopic[]
+  topics: ClusterTopic[],
+  jobId?: string
 ): Promise<ReclassifyResponse> {
   return apiRequest<ReclassifyResponse>("/api/cluster/reclassify", {
     method: "POST",
-    body: JSON.stringify({ documentIds, fromClusterId, toClusterId, documents, topics }),
+    body: JSON.stringify({ fromClusterIds, numClusters, documents, topics, jobId }),
   })
 }
 
@@ -428,7 +407,27 @@ export function listJobs(): SavedJob[] {
   return loadJobsFromStorage()
 }
 
-export function deleteJob(jobId: string): void {
+/**
+ * Delete a job from backend and/or local storage.
+ * - If backend is enabled: calls DELETE API endpoint
+ * - Always removes from local storage (for mock jobs)
+ */
+export async function deleteJob(jobId: string): Promise<void> {
+  try {
+    // Try to delete from backend if available
+    await apiRequest<{ jobId: string; deleted: boolean }>(
+      `/api/cluster/job/${jobId}`,
+      {
+        method: "DELETE",
+      }
+    )
+  } catch (error) {
+    // Backend might not be available or job might not exist in backend
+    // Continue to delete from local storage anyway
+    console.warn(`Failed to delete job ${jobId} from backend:`, error)
+  }
+
+  // Always remove from local storage (for mock jobs or as fallback)
   const jobs = loadJobsFromStorage().filter((j) => j.jobId !== jobId)
   saveJobsToStorage(jobs)
 }

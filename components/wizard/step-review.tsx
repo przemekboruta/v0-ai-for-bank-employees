@@ -4,12 +4,11 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import type { ClusteringResult, LLMSuggestion } from "@/lib/clustering-types"
-import { refineClusters, renameTopic as renameTopicApi } from "@/lib/api-client"
+import type { ClusteringResult, LLMSuggestion, ClusterTopic } from "@/lib/clustering-types"
+import { refineClusters, renameTopic as renameTopicApi, reclassifyDocuments, mergeClusters } from "@/lib/api-client"
 import {
   Sparkles,
   Merge,
-  Split,
   Tag,
   ArrowRightLeft,
   Check,
@@ -19,6 +18,10 @@ import {
   CheckCheck,
   XCircle,
   Pencil,
+  Loader2,
+  Layers,
+  Square,
+  CheckSquare,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -31,8 +34,6 @@ function SuggestionIcon({ type }: { type: LLMSuggestion["type"] }) {
   switch (type) {
     case "merge":
       return <Merge className="h-4 w-4" />
-    case "split":
-      return <Split className="h-4 w-4" />
     case "rename":
       return <Tag className="h-4 w-4" />
     case "reclassify":
@@ -44,8 +45,6 @@ function suggestionTypeLabel(type: LLMSuggestion["type"]): string {
   switch (type) {
     case "merge":
       return "Polaczenie"
-    case "split":
-      return "Podzial"
     case "rename":
       return "Zmiana nazwy"
     case "reclassify":
@@ -57,8 +56,6 @@ function suggestionTypeColor(type: LLMSuggestion["type"]): string {
   switch (type) {
     case "merge":
       return "text-chart-2"
-    case "split":
-      return "text-chart-3"
     case "rename":
       return "text-primary"
     case "reclassify":
@@ -66,33 +63,298 @@ function suggestionTypeColor(type: LLMSuggestion["type"]): string {
   }
 }
 
+function getClusterName(clusterId: number, topics: ClusterTopic[]): string {
+  const topic = topics.find((t) => t.id === clusterId)
+  return topic?.label || `Klaster ${clusterId}`
+}
+
+function getSuggestionDetails(
+  suggestion: LLMSuggestion,
+  topics: ClusterTopic[]
+): { title: string; details: string } {
+  const clusterNames = suggestion.targetClusterIds.map((id) => getClusterName(id, topics))
+
+  switch (suggestion.type) {
+    case "merge": {
+      if (clusterNames.length < 2) {
+        return {
+          title: "Połączenie klastrów",
+          details: suggestion.description,
+        }
+      }
+      const newName = suggestion.suggestedLabel || `Połączony klaster`
+      const clustersList = clusterNames.length > 3 
+        ? `${clusterNames.slice(0, 3).map((n) => `"${n}"`).join(", ")} i ${clusterNames.length - 3} innych`
+        : clusterNames.map((n) => `"${n}"`).join(", ")
+      return {
+        title: "Połączenie klastrów",
+        details: `Połączy klastry: ${clustersList} w jeden klaster "${newName}"`,
+      }
+    }
+    case "rename": {
+      if (clusterNames.length === 0) {
+        return {
+          title: "Zmiana nazwy klastra",
+          details: suggestion.description,
+        }
+      }
+      const oldName = clusterNames[0]
+      const newName = suggestion.suggestedLabel || "Nowa nazwa"
+      return {
+        title: "Zmiana nazwy klastra",
+        details: `Zmieni nazwę klastra "${oldName}" na "${newName}"`,
+      }
+    }
+    case "reclassify": {
+      if (clusterNames.length === 0) {
+        return {
+          title: "Reklasyfikacja klastrów",
+          details: suggestion.description,
+        }
+      }
+      // Dla reclassify, liczba nowych klastrów jest domyślnie równa liczbie starych (lub 2 jeśli jeden)
+      const numClusters = clusterNames.length > 1 ? clusterNames.length : 2
+      const clustersList = clusterNames.length > 3
+        ? `${clusterNames.slice(0, 3).map((n) => `"${n}"`).join(", ")} i ${clusterNames.length - 3} innych`
+        : clusterNames.map((n) => `"${n}"`).join(", ")
+      return {
+        title: "Reklasyfikacja klastrów",
+        details: `Podzieli klastry: ${clustersList} na ${numClusters} nowych klastrów używając KMeans`,
+      }
+    }
+  }
+}
+
+// Check if two suggestions conflict (affect the same clusters)
+function suggestionsConflict(
+  s1: LLMSuggestion,
+  s2: LLMSuggestion
+): boolean {
+  const ids1 = new Set(s1.targetClusterIds)
+  const ids2 = new Set(s2.targetClusterIds)
+  
+  // Check if they share any cluster IDs
+  for (const id of ids1) {
+    if (ids2.has(id)) {
+      return true
+    }
+  }
+  return false
+}
+
+// Mark conflicting suggestions as blocked after applying one
+function markConflictingSuggestions(
+  suggestions: LLMSuggestion[],
+  appliedIndex: number
+): LLMSuggestion[] {
+  const applied = suggestions[appliedIndex]
+  if (!applied || applied.applied) {
+    return suggestions
+  }
+  
+  return suggestions.map((s, idx) => {
+    if (idx === appliedIndex || s.applied || s.blocked) {
+      return s
+    }
+    
+    // Check if this suggestion conflicts with the applied one
+    if (suggestionsConflict(s, applied)) {
+      return { ...s, blocked: true }
+    }
+    
+    return s
+  })
+}
+
 export function StepReview({ result, onResultUpdate }: StepReviewProps) {
   const [expandedTopic, setExpandedTopic] = useState<number | null>(null)
   const [editingTopicId, setEditingTopicId] = useState<number | null>(null)
   const [editingLabel, setEditingLabel] = useState("")
+  const [applyingSuggestion, setApplyingSuggestion] = useState<number | null>(null)
+  const [selectedClusters, setSelectedClusters] = useState<Set<number>>(new Set())
+  const [actionMode, setActionMode] = useState<"merge" | "reclassify" | "advanced" | "generate-labels" | null>(null)
+  const [mergeLabel, setMergeLabel] = useState("")
+  const [reclassifyNumClusters, setReclassifyNumClusters] = useState(2)
+  const [isExecutingAction, setIsExecutingAction] = useState(false)
+  const [suggestionsExpanded, setSuggestionsExpanded] = useState(false)
 
-  const applySuggestion = (idx: number) => {
-    const updated = { ...result }
-    const suggestions = [...updated.llmSuggestions]
-    suggestions[idx] = { ...suggestions[idx], applied: true }
-    updated.llmSuggestions = suggestions
+  const toggleClusterSelection = (clusterId: number) => {
+    const newSelected = new Set(selectedClusters)
+    if (newSelected.has(clusterId)) {
+      newSelected.delete(clusterId)
+    } else {
+      newSelected.add(clusterId)
+    }
+    setSelectedClusters(newSelected)
+  }
 
-    const suggestion = suggestions[idx]
-    if (suggestion.type === "rename" && suggestion.suggestedLabel) {
-      const topics = [...updated.topics]
-      const topicIdx = topics.findIndex(
-        (t) => t.id === suggestion.targetClusterIds[0]
+  const handleExecuteMerge = async () => {
+    if (selectedClusters.size < 2) return
+    setIsExecutingAction(true)
+    try {
+      const jobId = result.jobId || undefined
+      const clusterIds = Array.from(selectedClusters)
+      const newLabel = mergeLabel.trim() || `Połączony klaster ${clusterIds.join(", ")}`
+      const updatedResult = await mergeClusters(
+        clusterIds,
+        newLabel,
+        result.documents,
+        result.topics,
+        jobId
       )
+      if (updatedResult) {
+        onResultUpdate(updatedResult)
+        setSelectedClusters(new Set())
+        setActionMode(null)
+        setMergeLabel("")
+      }
+    } catch (error) {
+      console.error("Failed to merge clusters:", error)
+    } finally {
+      setIsExecutingAction(false)
+    }
+  }
+
+  const handleExecuteReclassify = async () => {
+    if (selectedClusters.size < 1 || reclassifyNumClusters < 1) return
+    setIsExecutingAction(true)
+    try {
+      const jobId = result.jobId || undefined
+      const clusterIds = Array.from(selectedClusters)
+      const updatedResult = await reclassifyDocuments(
+        clusterIds,
+        reclassifyNumClusters,
+        result.documents,
+        result.topics,
+        jobId
+      )
+      if (updatedResult) {
+        onResultUpdate(updatedResult)
+        setSelectedClusters(new Set())
+        setActionMode(null)
+        setReclassifyNumClusters(2)
+      }
+    } catch (error) {
+      console.error("Failed to reclassify clusters:", error)
+    } finally {
+      setIsExecutingAction(false)
+    }
+  }
+
+  const handleGenerateLabels = async () => {
+    if (selectedClusters.size === 0) return
+    setIsExecutingAction(true)
+    try {
+      const jobId = result.jobId || undefined
+      const topicIds = Array.from(selectedClusters)
+      const response = await fetch("/api/cluster/generate-labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topicIds: topicIds,
+          topics: result.topics,
+          documents: result.documents,
+          jobId: jobId,
+        }),
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: { message: "Unknown error" } }))
+        throw new Error(errorData.error?.message || `HTTP ${response.status}: Failed to generate labels`)
+      }
+      const data = await response.json()
+      const updated = { ...result }
+      updated.topics = data.updatedTopics
+      onResultUpdate(updated)
+      setSelectedClusters(new Set())
+      setActionMode(null)
+    } catch (error) {
+      console.error("Failed to generate labels:", error)
+      alert(`Nie udało się wygenerować nazw: ${error instanceof Error ? error.message : "Nieznany błąd"}`)
+    } finally {
+      setIsExecutingAction(false)
+    }
+  }
+
+  const applySuggestion = async (idx: number) => {
+    const suggestion = result.llmSuggestions[idx]
+    const jobId = result.jobId || undefined
+    
+    setApplyingSuggestion(idx)
+    
+    try {
+      let updatedResult: ClusteringResult | null = null
+
+      // Execute operation via API based on suggestion type
+      if (suggestion.type === "merge" && suggestion.targetClusterIds.length >= 2) {
+        const newLabel = suggestion.suggestedLabel || `Połączony klaster ${suggestion.targetClusterIds.join(", ")}`
+        updatedResult = await mergeClusters(
+          suggestion.targetClusterIds,
+          newLabel,
+          result.documents,
+          result.topics,
+          jobId
+        )
+      } else if (suggestion.type === "rename" && suggestion.suggestedLabel && suggestion.targetClusterIds.length >= 1) {
+        const topicId = suggestion.targetClusterIds[0]
+        await renameTopicApi(topicId, suggestion.suggestedLabel, jobId)
+        // For rename, update locally since API doesn't return full result
+        const updated = { ...result }
+        const topics = [...updated.topics]
+        const topicIdx = topics.findIndex((t) => t.id === topicId)
       if (topicIdx !== -1) {
         topics[topicIdx] = {
           ...topics[topicIdx],
           label: suggestion.suggestedLabel,
         }
         updated.topics = topics
+          updatedResult = updated
+        }
+      } else if (suggestion.type === "reclassify" && suggestion.targetClusterIds.length >= 1) {
+        // All IDs are source clusters to reclassify
+        const fromClusterIds = suggestion.targetClusterIds
+        // Default to 2 clusters if not specified, or use a reasonable number based on document count
+        const numClusters = suggestion.targetClusterIds.length > 1 ? suggestion.targetClusterIds.length : 2
+        
+        // Reclassify all documents from source clusters into new clusters
+        updatedResult = await reclassifyDocuments(
+          fromClusterIds,
+          numClusters,
+          result.documents,
+          result.topics,
+          jobId
+        )
       }
-    }
 
-    onResultUpdate(updated)
+      // Update result with operation result
+      if (updatedResult) {
+        // Mark this suggestion as applied and mark conflicting ones as blocked
+        let updatedSuggestions = result.llmSuggestions.map((s, i) =>
+          i === idx ? { ...s, applied: true } : s
+        )
+        updatedSuggestions = markConflictingSuggestions(updatedSuggestions, idx)
+        
+        const updated = {
+          ...updatedResult,
+          llmSuggestions: updatedSuggestions,
+        }
+        onResultUpdate(updated)
+      } else {
+        // Fallback: just mark as applied and block conflicts
+        const updated = { ...result }
+        let updatedSuggestions = result.llmSuggestions.map((s, i) =>
+          i === idx ? { ...s, applied: true } : s
+        )
+        updatedSuggestions = markConflictingSuggestions(updatedSuggestions, idx)
+        updated.llmSuggestions = updatedSuggestions
+        onResultUpdate(updated)
+      }
+    } catch (error) {
+      console.error(`Failed to apply ${suggestion.type} suggestion:`, error)
+      // On error, don't mark as applied or block conflicts
+      // Just show error to user (error is already logged to console)
+    } finally {
+      setApplyingSuggestion(null)
+    }
   }
 
   const dismissSuggestion = (idx: number) => {
@@ -102,28 +364,14 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     onResultUpdate(updated)
   }
 
-  const applyAll = () => {
-    const updated = { ...result }
-    const suggestions = updated.llmSuggestions.map((s) => ({
-      ...s,
-      applied: true,
-    }))
-    updated.llmSuggestions = suggestions
-
-    // Apply all renames
-    const topics = [...updated.topics]
-    for (const s of suggestions) {
-      if (s.type === "rename" && s.suggestedLabel) {
-        const topicIdx = topics.findIndex(
-          (t) => t.id === s.targetClusterIds[0]
-        )
-        if (topicIdx !== -1) {
-          topics[topicIdx] = { ...topics[topicIdx], label: s.suggestedLabel }
-        }
+  const applyAll = async () => {
+    // Apply all suggestions sequentially
+    for (let i = 0; i < result.llmSuggestions.length; i++) {
+      const suggestion = result.llmSuggestions[i]
+      if (!suggestion.applied) {
+        await applySuggestion(i)
       }
     }
-    updated.topics = topics
-    onResultUpdate(updated)
   }
 
   const dismissAll = () => {
@@ -142,8 +390,9 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
       setEditingTopicId(null)
       return
     }
+    const jobId = result.jobId || undefined
     try {
-      await renameTopicApi(editingTopicId, editingLabel.trim())
+      await renameTopicApi(editingTopicId, editingLabel.trim(), jobId)
     } catch {
       // Continue with local update even if API fails
     }
@@ -182,28 +431,367 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     }
   }
 
-  const pendingSuggestions = result.llmSuggestions.filter((s) => !s.applied)
+  const pendingSuggestions = result.llmSuggestions.filter((s) => !s.applied && !s.blocked)
   const appliedSuggestions = result.llmSuggestions.filter((s) => s.applied)
+  const blockedSuggestions = result.llmSuggestions.filter((s) => s.blocked && !s.applied)
 
   return (
+    <div className="flex flex-col gap-6">
+      {/* Top: Cluster Actions */}
+      <div className="glass rounded-2xl border border-white/[0.1] p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-display text-xl font-semibold text-foreground">
+            Akcje na klastrach
+          </h2>
+        </div>
+        
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {/* Merge Action */}
+          <div className="glass-interactive rounded-xl border border-white/[0.1] p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Merge className="h-4 w-4 text-chart-2" />
+              <h3 className="text-sm font-semibold text-foreground">Połącz klastry</h3>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Wybierz co najmniej 2 klastry do połączenia w jeden
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setActionMode(actionMode === "merge" ? null : "merge")}
+              className={cn(
+                "w-full gap-1.5 border-white/[0.1] bg-transparent",
+                actionMode === "merge" && "border-primary/40 bg-primary/10"
+              )}
+            >
+              <Merge className="h-3.5 w-3.5" />
+              {actionMode === "merge" ? "Anuluj" : "Wybierz klastry"}
+            </Button>
+          </div>
+
+          {/* Reclassify Action */}
+          <div className="glass-interactive rounded-xl border border-white/[0.1] p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-chart-4" />
+              <h3 className="text-sm font-semibold text-foreground">Reklasyfikuj</h3>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Podziel wybrane klastry na nowe używając KMeans
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setActionMode(actionMode === "reclassify" ? null : "reclassify")}
+              className={cn(
+                "w-full gap-1.5 border-white/[0.1] bg-transparent",
+                actionMode === "reclassify" && "border-primary/40 bg-primary/10"
+              )}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              {actionMode === "reclassify" ? "Anuluj" : "Wybierz klastry"}
+            </Button>
+          </div>
+
+          {/* Generate Labels Action */}
+          <div className="glass-interactive rounded-xl border border-white/[0.1] p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold text-foreground">Wygeneruj nazwy</h3>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Użyj AI do wygenerowania nazw dla wybranych klastrów
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                if (selectedClusters.size === 0) {
+                  // If no clusters selected, select all
+                  setSelectedClusters(new Set(result.topics.map((t) => t.id)))
+                  setActionMode("generate-labels")
+                } else {
+                  // Generate labels for selected clusters
+                  await handleGenerateLabels()
+                }
+              }}
+              disabled={isExecutingAction}
+              className="w-full gap-1.5 border-white/[0.1] bg-transparent"
+            >
+              {isExecutingAction ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Generowanie...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {selectedClusters.size > 0 ? "Wygeneruj" : "Wybierz klastry"}
+                </>
+              )}
+            </Button>
+          </div>
+
+          {/* Advanced Options */}
+          <div className="glass-interactive rounded-xl border border-white/[0.1] p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <ArrowRightLeft className="h-4 w-4 text-chart-3" />
+              <h3 className="text-sm font-semibold text-foreground">Zaawansowane</h3>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Reklasyfikuj z własnymi parametrami algorytmu
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setActionMode(actionMode === "advanced" ? null : "advanced")}
+              className={cn(
+                "w-full gap-1.5 border-white/[0.1] bg-transparent",
+                actionMode === "advanced" && "border-primary/40 bg-primary/10"
+              )}
+            >
+              <ArrowRightLeft className="h-3.5 w-3.5" />
+              {actionMode === "advanced" ? "Anuluj" : "Otwórz"}
+            </Button>
+          </div>
+        </div>
+
+        {/* Action Controls */}
+        {actionMode && actionMode !== "advanced" && (
+          <div className="mt-4 glass rounded-xl border border-primary/20 bg-primary/5 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-semibold text-foreground">
+                {actionMode === "merge" ? "Połącz klastry" : actionMode === "reclassify" ? "Reklasyfikuj klastry" : "Wygeneruj nazwy"}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setActionMode(null)
+                  setSelectedClusters(new Set())
+                  setMergeLabel("")
+                  setReclassifyNumClusters(2)
+                }}
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              {actionMode === "merge"
+                ? "Wybierz co najmniej 2 klastry do połączenia"
+                : actionMode === "reclassify"
+                ? "Wybierz klastry do reklasyfikacji (będą podzielone na nowe)"
+                : "Wybierz klastry do wygenerowania nazw"}
+            </p>
+            {actionMode === "merge" && (
+              <div className="mb-3">
+                <label className="mb-1.5 block text-xs font-medium text-foreground">
+                  Nazwa nowego klastra
+                </label>
+                <input
+                  type="text"
+                  value={mergeLabel}
+                  onChange={(e) => setMergeLabel(e.target.value)}
+                  placeholder="Nazwa połączonego klastra..."
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                />
+              </div>
+            )}
+            {actionMode === "reclassify" && (
+              <div className="mb-3">
+                <label className="mb-1.5 block text-xs font-medium text-foreground">
+                  Liczba nowych klastrów
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={reclassifyNumClusters}
+                  onChange={(e) => setReclassifyNumClusters(parseInt(e.target.value) || 2)}
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                />
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={
+                  actionMode === "merge"
+                    ? handleExecuteMerge
+                    : actionMode === "reclassify"
+                    ? handleExecuteReclassify
+                    : handleGenerateLabels
+                }
+                disabled={
+                  isExecutingAction ||
+                  (actionMode === "merge" && selectedClusters.size < 2) ||
+                  ((actionMode === "reclassify" || actionMode === "generate-labels") && selectedClusters.size < 1)
+                }
+                className="flex-1 gap-1.5 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary disabled:opacity-50"
+              >
+                {isExecutingAction ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Przetwarzanie...
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    Wykonaj
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedClusters(new Set())}
+                disabled={selectedClusters.size === 0}
+                className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+              >
+                <X className="h-3.5 w-3.5" />
+                Wyczyść
+              </Button>
+            </div>
+            {selectedClusters.size > 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Wybrano: {selectedClusters.size} {selectedClusters.size === 1 ? "klaster" : "klastrów"}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Advanced Options Panel */}
+        {actionMode === "advanced" && (
+          <div className="mt-4 glass rounded-xl border border-primary/20 bg-primary/5 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-semibold text-foreground">Zaawansowana reklasyfikacja</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setActionMode(null)
+                  setSelectedClusters(new Set())
+                }}
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+            <p className="mb-4 text-xs text-muted-foreground">
+              Wybierz klastry i ustaw parametry algorytmu do reklasyfikacji
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">
+                  Algorytm
+                </label>
+                <select
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                  defaultValue="kmeans"
+                >
+                  <option value="kmeans">KMeans</option>
+                  <option value="hdbscan">HDBSCAN</option>
+                  <option value="agglomerative">Agglomerative</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">
+                  Redukcja wymiarów
+                </label>
+                <select
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                  defaultValue="umap"
+                >
+                  <option value="umap">UMAP</option>
+                  <option value="pca">PCA</option>
+                  <option value="tsne">t-SNE</option>
+                  <option value="none">Brak</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">
+                  Liczba klastrów
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  defaultValue={2}
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">
+                  Min. rozmiar klastra
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  defaultValue={5}
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                />
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={handleExecuteReclassify}
+              disabled={isExecutingAction || selectedClusters.size < 1}
+              className="mt-4 w-full gap-1.5 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary disabled:opacity-50"
+            >
+              {isExecutingAction ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Przetwarzanie...
+                </>
+              ) : (
+                <>
+                  <Layers className="h-3.5 w-3.5" />
+                  Wykonaj reklasyfikację
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </div>
+
     <div className="flex flex-col gap-6 lg:flex-row">
       {/* Left: LLM Suggestions */}
       <div className="flex flex-1 flex-col gap-4">
         <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => setSuggestionsExpanded(!suggestionsExpanded)}
+            className="flex items-center justify-between rounded-lg p-2 hover:bg-white/[0.04]"
+          >
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 glow-primary">
               <Sparkles className="h-4 w-4 text-primary" />
             </div>
-            <h2 className="font-display text-xl font-semibold text-foreground">
+              <h2 className="font-display text-lg font-semibold text-foreground">
               Sugestie AI
             </h2>
+              {pendingSuggestions.length > 0 && (
+                <Badge variant="secondary" className="border-0 bg-primary/20 text-[10px] text-primary">
+                  {pendingSuggestions.length}
+                </Badge>
+              )}
           </div>
-          <p className="text-sm text-muted-foreground">
-            LLM przeanalizowal klastry i proponuje ulepszenia. Zaakceptuj lub
-            odrzuc kazda sugestie, albo uzyj akcji zbiorczych.
-          </p>
+            {suggestionsExpanded ? (
+              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            )}
+          </button>
+          {suggestionsExpanded && (
+            <p className="px-2 text-xs text-muted-foreground">
+              LLM przeanalizowal klastry i proponuje ulepszenia.
+            </p>
+          )}
         </div>
 
+        {suggestionsExpanded && (
+          <>
         {/* Batch actions */}
         {pendingSuggestions.length > 1 && (
           <div className="flex items-center gap-2">
@@ -239,7 +827,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
           {isRefining ? "Analizuje..." : "Popros AI o wiecej sugestii"}
         </Button>
 
-        {pendingSuggestions.length === 0 && appliedSuggestions.length === 0 && (
+        {pendingSuggestions.length === 0 && appliedSuggestions.length === 0 && blockedSuggestions.length === 0 && (
           <div className="glass flex flex-col items-center gap-3 rounded-2xl py-10">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15">
               <Check className="h-5 w-5 text-accent" />
@@ -250,6 +838,37 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
             <p className="text-xs text-muted-foreground">
               Klasteryzacja wyglada dobrze. Mozesz przejsc dalej.
             </p>
+          </div>
+        )}
+
+        {/* Blocked suggestions section */}
+        {blockedSuggestions.length > 0 && (
+          <div className="glass rounded-2xl border border-destructive/20 bg-destructive/5 p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <XCircle className="h-4 w-4 text-destructive/70" />
+              <p className="text-sm font-semibold text-destructive/90">
+                Zablokowane sugestie ({blockedSuggestions.length})
+              </p>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Te sugestie nie mogą być wykonane, ponieważ dotyczą klastrów, które zostały już zmienione przez inną sugestię.
+            </p>
+            <div className="flex flex-col gap-2">
+              {blockedSuggestions.map((suggestion) => {
+                const originalIdx = result.llmSuggestions.indexOf(suggestion)
+                const details = getSuggestionDetails(suggestion, result.topics)
+                return (
+                  <div
+                    key={`blocked-${originalIdx}`}
+                    className="rounded-lg border border-destructive/10 bg-white/[0.02] p-2.5"
+                  >
+                    <p className="text-xs font-medium text-muted-foreground line-through">
+                      {details.details}
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 
@@ -285,17 +904,39 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                             pewnosci
                           </Badge>
                         </div>
-                        <p className="text-sm leading-relaxed text-muted-foreground">
+                        {(() => {
+                          const details = getSuggestionDetails(suggestion, result.topics)
+                          const affectedClusters = suggestion.targetClusterIds
+                            .map((id) => result.topics.find((t) => t.id === id))
+                            .filter((t): t is ClusterTopic => t !== undefined)
+                          
+                          return (
+                            <>
+                              <p className="text-sm font-medium text-foreground">
+                                {details.details}
+                              </p>
+                              {affectedClusters.length > 0 && (
+                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                  {affectedClusters.map((topic) => (
+                                    <Badge
+                                      key={topic.id}
+                                      variant="outline"
+                                      className="border-white/[0.15] bg-white/[0.04] text-[10px] text-muted-foreground"
+                                      style={{ borderLeftColor: topic.color, borderLeftWidth: "3px" }}
+                                    >
+                                      {topic.label}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                              {suggestion.description !== details.details && (
+                                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                           {suggestion.description}
-                        </p>
-                        {suggestion.suggestedLabel && (
-                          <p className="text-xs text-muted-foreground">
-                            Proponowana nazwa:{" "}
-                            <span className="font-medium text-primary">
-                              {suggestion.suggestedLabel}
-                            </span>
                           </p>
                         )}
+                            </>
+                          )
+                        })()}
                       </div>
                     </div>
                     <div className="flex justify-end gap-2">
@@ -311,10 +952,25 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                       <Button
                         size="sm"
                         onClick={() => applySuggestion(originalIdx)}
-                        className="gap-1 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary"
+                        disabled={applyingSuggestion === originalIdx || suggestion.blocked}
+                        className="gap-1 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary disabled:opacity-50 disabled:cursor-not-allowed"
                       >
+                        {applyingSuggestion === originalIdx ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Przetwarzanie...
+                          </>
+                        ) : suggestion.blocked ? (
+                          <>
+                            <X className="h-3 w-3" />
+                            Zablokowane
+                          </>
+                        ) : (
+                          <>
                         <Check className="h-3 w-3" />
                         Zastosuj
+                          </>
+                        )}
                       </Button>
                     </div>
                   </div>
@@ -337,31 +993,52 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
             </div>
           ))}
         </div>
+          </>
+        )}
       </div>
 
-      {/* Right: Topic Overview with inline rename */}
+      {/* Right: Topic Overview */}
       <div className="flex w-full flex-col gap-4 lg:w-96">
         <div className="flex items-center justify-between">
           <h3 className="font-display text-lg font-semibold text-foreground">
             Wykryte tematy ({result.topics.length})
           </h3>
-          <p className="text-[10px] text-muted-foreground">
-            Kliknij olowek, aby zmienic nazwe
-          </p>
         </div>
+
         <ScrollArea className="h-[480px]">
           <div className="flex flex-col gap-2 pr-3">
             {result.topics.map((topic) => (
               <div
                 key={topic.id}
-                className="glass-interactive cursor-pointer rounded-xl p-3"
-                onClick={() =>
-                  setExpandedTopic(
-                    expandedTopic === topic.id ? null : topic.id
-                  )
-                }
+                className={cn(
+                  "glass-interactive rounded-xl p-3",
+                  actionMode ? "cursor-default" : "cursor-pointer"
+                )}
+                onClick={() => {
+                  if (actionMode) {
+                    toggleClusterSelection(topic.id)
+                  } else {
+                    setExpandedTopic(expandedTopic === topic.id ? null : topic.id)
+                  }
+                }}
               >
                 <div className="flex items-center gap-3">
+                  {actionMode && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        toggleClusterSelection(topic.id)
+                      }}
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
+                    >
+                      {selectedClusters.has(topic.id) ? (
+                        <CheckSquare className="h-4 w-4 text-primary" />
+                      ) : (
+                        <Square className="h-4 w-4" />
+                      )}
+                    </button>
+                  )}
                   <div
                     className="h-3 w-3 shrink-0 rounded-full"
                     style={{ backgroundColor: topic.color }}
@@ -453,6 +1130,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
             ))}
           </div>
         </ScrollArea>
+      </div>
       </div>
     </div>
   )

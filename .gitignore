@@ -1,14 +1,76 @@
-# v0 runtime files (should only exist in preview, not in git)
+# === v0 runtime (preview only) ===
 __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
 instrumentation-client.js
 instrumentation-client.ts
 
-# Common ignores
+# === Zmienne środowiskowe (sekrety) ===
+.env
+.env.local
+.env*.local
+backend/.env
+!.env.example
+!backend/.env.example
+
+# === Node / Next.js ===
 node_modules/
 .next/
-.env*.local
-.DS_Store
+out/
+.turbo/
+*.tsbuildinfo
+
+# === Python ===
 venv/
-.vscode
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === Testy / coverage (Python) ===
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# === IDE / edytory ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === System ===
+.DS_Store
+Thumbs.db
+
+# === Logi i cache ===
+*.log
+npm-debug.log*
+.cache/
+
+# Duplikaty z dopiskiem " 2" (macOS/sync)
+* 2.*
+
+# === Opcjonalnie: lokalne pliki testowe (odkomentuj w razie potrzeby) ===
+# test_sentences.csv
+# test_sentences.json

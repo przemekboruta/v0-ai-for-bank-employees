@@ -16,6 +16,7 @@ import type {
   SavedJob,
 } from "@/lib/clustering-types"
 import { DEFAULT_CLUSTERING_CONFIG } from "@/lib/clustering-types"
+import { updateJob, getJobStatus } from "@/lib/api-client"
 import { ArrowLeft, ArrowRight, RotateCcw, Sparkles } from "lucide-react"
 
 const STEP_ORDER: WizardStep[] = [
@@ -79,13 +80,37 @@ export default function HomePage() {
   }, [])
 
   // Dashboard: resume a completed job
-  const handleResumeJob = useCallback((job: SavedJob) => {
-    if (job.status === "completed" && job.result) {
-      setClusteringResult(job.result)
-      setLastJobId(job.jobId)
-      setConfig(job.config)
-      setJobName(job.name)
-      setCurrentStep("review")
+  const handleResumeJob = useCallback(async (job: SavedJob) => {
+    if (job.status === "completed") {
+      // Try to fetch fresh result from backend if available
+      try {
+        const statusRes = await getJobStatus(job.jobId)
+        if (statusRes.status === "completed" && statusRes.result) {
+          // Use fresh result from backend
+          const freshResult = statusRes.result as ClusteringResult
+          setClusteringResult(freshResult)
+          setLastJobId(job.jobId)
+          setConfig(job.config)
+          setJobName(job.name)
+          setCurrentStep("review")
+          // Update localStorage with fresh result
+          updateJob(job.jobId, {
+            result: freshResult,
+            topicCount: freshResult.topics?.length ?? null,
+          })
+          return
+        }
+      } catch {
+        // Backend not available or error, fall back to local result
+      }
+      // Fall back to local result
+      if (job.result) {
+        setClusteringResult(job.result)
+        setLastJobId(job.jobId)
+        setConfig(job.config)
+        setJobName(job.name)
+        setCurrentStep("review")
+      }
     }
   }, [])
 
@@ -97,6 +122,26 @@ export default function HomePage() {
       setCurrentStep("review")
     },
     []
+  )
+
+  // Handle result updates (from merge/split/rename/reclassify operations)
+  const handleResultUpdate = useCallback(
+    (updatedResult: ClusteringResult) => {
+      setClusteringResult(updatedResult)
+      // Save updated result to localStorage if we have a jobId
+      const jobId = updatedResult.jobId || lastJobId
+      if (jobId) {
+        updateJob(jobId, {
+          result: updatedResult,
+          topicCount: updatedResult.topics?.length ?? null,
+        })
+        // Update lastJobId if it wasn't set
+        if (!lastJobId && updatedResult.jobId) {
+          setLastJobId(updatedResult.jobId)
+        }
+      }
+    },
+    [lastJobId]
   )
 
   const handleProcessingError = useCallback((message: string) => {
@@ -228,14 +273,14 @@ export default function HomePage() {
         {currentStep === "review" && clusteringResult && (
           <StepReview
             result={clusteringResult}
-            onResultUpdate={setClusteringResult}
+            onResultUpdate={handleResultUpdate}
           />
         )}
 
         {currentStep === "explore" && clusteringResult && (
           <StepExplore
             result={clusteringResult}
-            onResultUpdate={setClusteringResult}
+            onResultUpdate={handleResultUpdate}
           />
         )}
       </main>

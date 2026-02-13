@@ -16,8 +16,9 @@ ENCODER_BATCH_SIZE: int = int(os.getenv("ENCODER_BATCH_SIZE", "64"))
 ENCODER_MAX_SEQ_LENGTH: int = int(os.getenv("ENCODER_MAX_SEQ_LENGTH", "512"))
 ENCODER_DEVICE: str = os.getenv("ENCODER_DEVICE", "auto")
 
-# === LLM (OpenAI) ===
+# === LLM (OpenAI / OpenAI-compatible) ===
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "").strip()  # opcjonalnie: np. Azure, proxy, lokalny endpoint
 LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))

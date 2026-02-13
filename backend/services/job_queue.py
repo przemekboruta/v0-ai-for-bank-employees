@@ -208,6 +208,16 @@ class JobQueueService:
             return None
         return json.loads(raw)
 
+    async def update_result(self, job_id: str, result: dict) -> None:
+        """Update job result in Redis (for merge/split/rename/reclassify operations)."""
+        r = await self._get_redis()
+        await r.set(
+            self._key("job", job_id, "result"),
+            json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"),
+        )
+        await r.expire(self._key("job", job_id, "result"), RESULT_TTL)
+        logger.info(f"Job {job_id} result updated")
+
     async def get_texts(self, job_id: str) -> list[str] | None:
         """Get stored texts for a job."""
         r = await self._get_redis()
@@ -215,6 +225,27 @@ class JobQueueService:
         if raw is None:
             return None
         return json.loads(raw)
+
+    async def delete_job(self, job_id: str) -> bool:
+        """Delete a job and all associated data (texts, embeddings, result)."""
+        r = await self._get_redis()
+        
+        # Check if job exists
+        exists = await r.exists(self._key("job", job_id))
+        if not exists:
+            return False
+        
+        # Delete all job-related keys
+        pipe = r.pipeline()
+        pipe.delete(self._key("job", job_id))
+        pipe.delete(self._key("job", job_id, "result"))
+        pipe.delete(self._key("texts", job_id))
+        pipe.delete(self._key("embeddings", job_id))
+        pipe.srem(self._key("active_jobs"), job_id)
+        await pipe.execute()
+        
+        logger.info(f"Job {job_id} deleted")
+        return True
 
     # ---- Embedding cache ----
 

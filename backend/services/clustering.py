@@ -183,7 +183,9 @@ class ClusteringService:
     # ---- Analysis ----
 
     def compute_coherence(
-        self, embeddings: np.ndarray, labels: np.ndarray,
+        self,
+        embeddings: np.ndarray,
+        labels: np.ndarray,
     ) -> dict[int, float]:
         mask = labels != -1
         if mask.sum() < 2:
@@ -208,23 +210,73 @@ class ClusteringService:
     def extract_keywords(self, texts_in_cluster: list[str], n: int = 7) -> list[str]:
         if not texts_in_cluster:
             return []
+
+        # If only one document, use simple word frequency
+        if len(texts_in_cluster) == 1:
+            try:
+                from collections import Counter
+                import re
+
+                text = texts_in_cluster[0].lower()
+                # Remove punctuation and split
+                words = re.findall(r"\b\w+\b", text)
+                # Filter out stop words and short words
+                filtered = [w for w in words if w not in POLISH_STOP_WORDS and len(w) > 2]
+                counter = Counter(filtered)
+                return [word for word, _ in counter.most_common(n)]
+            except Exception as e:
+                logger.warning(f"Simple keyword extraction error: {e}")
+                return []
+
         try:
-            doc = " ".join(texts_in_cluster)
+            # Adjust min_df and max_df based on number of documents
+            num_docs = len(texts_in_cluster)
+            # min_df: at least 1 document (or 1 if only 1 doc)
+            min_df = 1
+            # max_df: at most 95% of documents, but ensure it's >= min_df
+            max_df = min(0.95, max(0.5, 1.0 - (1.0 / num_docs)))
+
+            # Ensure max_df is always >= min_df
+            if max_df < min_df:
+                max_df = min_df
+
             vec = TfidfVectorizer(
-                max_features=500, stop_words=POLISH_STOP_WORDS, min_df=1, max_df=0.95
+                max_features=500,
+                stop_words=POLISH_STOP_WORDS,
+                min_df=min_df,
+                max_df=max_df,
+                ngram_range=(1, 2),  # Include unigrams and bigrams
             )
-            tfidf = vec.fit_transform([doc])
+            tfidf = vec.fit_transform(texts_in_cluster)
             names = vec.get_feature_names_out()
-            scores = tfidf.toarray()[0]
+
+            # Sum TF-IDF scores across all documents
+            scores = tfidf.sum(axis=0).A1
             top = scores.argsort()[-n:][::-1]
             return [names[i] for i in top if scores[i] > 0]
         except Exception as e:
             logger.warning(f"TF-IDF error: {e}")
-            return []
+            # Fallback to simple word frequency
+            try:
+                from collections import Counter
+                import re
+
+                all_text = " ".join(texts_in_cluster).lower()
+                words = re.findall(r"\b\w+\b", all_text)
+                filtered = [w for w in words if w not in POLISH_STOP_WORDS and len(w) > 2]
+                counter = Counter(filtered)
+                return [word for word, _ in counter.most_common(n)]
+            except Exception as e2:
+                logger.warning(f"Fallback keyword extraction error: {e2}")
+                return []
 
     def get_representative_samples(
-        self, embeddings: np.ndarray, labels: np.ndarray, texts: list[str],
-        cluster_id: int, n: int = 5,
+        self,
+        embeddings: np.ndarray,
+        labels: np.ndarray,
+        texts: list[str],
+        cluster_id: int,
+        n: int = 5,
     ) -> list[str]:
         mask = labels == cluster_id
         indices = np.where(mask)[0]
@@ -237,9 +289,19 @@ class ClusteringService:
         return [texts[indices[i]] for i in top]
 
     def build_topics(
-        self, embeddings: np.ndarray, coords_2d: np.ndarray, labels: np.ndarray,
-        texts: list[str], coherence_scores: dict[int, float],
+        self,
+        embeddings: np.ndarray,
+        coords_2d: np.ndarray,
+        labels: np.ndarray,
+        texts: list[str],
+        coherence_scores: dict[int, float],
     ) -> list[dict]:
+        # Normalize coords same way as in build_documents
+        x_min, x_max = coords_2d[:, 0].min(), coords_2d[:, 0].max()
+        y_min, y_max = coords_2d[:, 1].min(), coords_2d[:, 1].max()
+        x_range = x_max - x_min if x_max != x_min else 1.0
+        y_range = y_max - y_min if y_max != y_min else 1.0
+
         unique = sorted(set(labels))
         topics = []
         for cid in unique:
@@ -252,22 +314,34 @@ class ClusteringService:
             keywords = self.extract_keywords(cluster_texts)
             samples = self.get_representative_samples(embeddings, labels, texts, cid, n=5)
             coherence = coherence_scores.get(cid, 0.5)
-            topics.append({
-                "id": int(cid),
-                "label": f"Klaster {cid}",
-                "description": "",
-                "documentCount": int(mask.sum()),
-                "sampleTexts": samples,
-                "color": CLUSTER_COLORS[cid % len(CLUSTER_COLORS)],
-                "centroidX": float(cluster_coords[:, 0].mean()),
-                "centroidY": float(cluster_coords[:, 1].mean()),
-                "coherenceScore": round(coherence, 3),
-                "keywords": keywords,
-            })
+
+            # Calculate centroid from normalized coordinates (same as documents)
+            centroid_x_raw = cluster_coords[:, 0].mean()
+            centroid_y_raw = cluster_coords[:, 1].mean()
+            centroid_x_norm = 5 + 90 * (centroid_x_raw - x_min) / x_range
+            centroid_y_norm = 5 + 90 * (centroid_y_raw - y_min) / y_range
+
+            topics.append(
+                {
+                    "id": int(cid),
+                    "label": f"Klaster {cid}",
+                    "description": "",
+                    "documentCount": int(mask.sum()),
+                    "sampleTexts": samples,
+                    "color": CLUSTER_COLORS[cid % len(CLUSTER_COLORS)],
+                    "centroidX": round(float(centroid_x_norm), 2),
+                    "centroidY": round(float(centroid_y_norm), 2),
+                    "coherenceScore": round(coherence, 3),
+                    "keywords": keywords,
+                }
+            )
         return topics
 
     def build_documents(
-        self, texts: list[str], labels: np.ndarray, coords_2d: np.ndarray,
+        self,
+        texts: list[str],
+        labels: np.ndarray,
+        coords_2d: np.ndarray,
     ) -> list[dict]:
         x_min, x_max = coords_2d[:, 0].min(), coords_2d[:, 0].max()
         y_min, y_max = coords_2d[:, 1].min(), coords_2d[:, 1].max()
@@ -278,19 +352,22 @@ class ClusteringService:
         for i, text in enumerate(texts):
             x_norm = 5 + 90 * (coords_2d[i, 0] - x_min) / x_range
             y_norm = 5 + 90 * (coords_2d[i, 1] - y_min) / y_range
-            documents.append({
-                "id": f"doc-{i}",
-                "text": text,
-                "clusterId": int(labels[i]),
-                "x": round(float(x_norm), 2),
-                "y": round(float(y_norm), 2),
-            })
+            documents.append(
+                {
+                    "id": f"doc-{i}",
+                    "text": text,
+                    "clusterId": int(labels[i]),
+                    "x": round(float(x_norm), 2),
+                    "y": round(float(y_norm), 2),
+                }
+            )
         return documents
 
     def health_check(self) -> dict:
         try:
             import umap as u
             import hdbscan as h
+
             return {
                 "umap": {"status": "up", "version": u.__version__},
                 "hdbscan": {"status": "up", "version": h.__version__},

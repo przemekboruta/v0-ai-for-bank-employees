@@ -16,51 +16,39 @@ import type {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { documentIds, fromClusterId, toClusterId, documents, topics } = body as {
-      documentIds: string[]
-      fromClusterId: number
-      toClusterId: number
+    const { fromClusterIds, numClusters, documents, topics, jobId } = body as {
+      fromClusterIds: number[]
+      numClusters: number
       documents: DocumentItem[]
       topics: ClusterTopic[]
+      jobId?: string
     }
 
     if (isPythonBackendEnabled()) {
       return proxyToBackend("/api/cluster/reclassify", {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ fromClusterIds, numClusters, documents, topics, jobId }),
       })
     }
 
-    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
+    if (!fromClusterIds || fromClusterIds.length === 0) {
       return NextResponse.json(
         {
           error: {
             code: "INVALID_INPUT",
-            message: "Pole 'documentIds' jest wymagane i musi zawierac co najmniej 1 id.",
+            message: "Pole 'fromClusterIds' jest wymagane i musi zawierac co najmniej 1 id.",
           },
         },
         { status: 400 }
       )
     }
 
-    if (fromClusterId === undefined || toClusterId === undefined) {
+    if (!numClusters || numClusters < 1) {
       return NextResponse.json(
         {
           error: {
             code: "INVALID_INPUT",
-            message: "Pola 'fromClusterId' i 'toClusterId' sa wymagane.",
-          },
-        },
-        { status: 400 }
-      )
-    }
-
-    if (fromClusterId === toClusterId) {
-      return NextResponse.json(
-        {
-          error: {
-            code: "INVALID_INPUT",
-            message: "Klaster zrodlowy i docelowy nie moga byc takie same.",
+            message: "Pole 'numClusters' jest wymagane i musi byc wieksze od 0.",
           },
         },
         { status: 400 }
@@ -79,11 +67,16 @@ export async function POST(request: Request) {
       )
     }
 
+    // Automatically find all documents from source clusters
+    const sourceClusterIdSet = new Set(sourceClusterIds)
+    const documentIds = documents
+      .filter((d) => sourceClusterIdSet.has(d.clusterId))
+      .map((d) => d.id)
     const docIdSet = new Set(documentIds)
 
     // Przenies dokumenty
     const updatedDocuments = documents.map((doc) => {
-      if (docIdSet.has(doc.id) && doc.clusterId === fromClusterId) {
+      if (docIdSet.has(doc.id) && sourceClusterIdSet.has(doc.clusterId)) {
         return { ...doc, clusterId: toClusterId }
       }
       return doc
@@ -92,7 +85,7 @@ export async function POST(request: Request) {
     // Przelicz liczby dokumentow i centroidy
     const updatedTopics = topics.map((topic) => {
       const topicDocs = updatedDocuments.filter((d) => d.clusterId === topic.id)
-      if (topic.id === fromClusterId || topic.id === toClusterId) {
+      if (sourceClusterIdSet.has(topic.id) || topic.id === toClusterId) {
         const cx = topicDocs.length > 0
           ? topicDocs.reduce((sum, d) => sum + d.x, 0) / topicDocs.length
           : topic.centroidX
@@ -121,7 +114,7 @@ export async function POST(request: Request) {
       ...result,
       reclassifyInfo: {
         documentIds,
-        fromClusterId,
+        fromClusterIds: sourceClusterIds,
         toClusterId,
         documentsAffected: documentIds.length,
       },

@@ -267,10 +267,10 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
   }, [jobs, refreshJobs])
 
   const handleDelete = useCallback(
-    (jobId: string, e: React.MouseEvent) => {
+    async (jobId: string, e: React.MouseEvent) => {
       e.stopPropagation()
-      deleteJob(jobId)
-      refreshJobs()
+      await deleteJob(jobId)
+      await refreshJobs()
     },
     [refreshJobs]
   )

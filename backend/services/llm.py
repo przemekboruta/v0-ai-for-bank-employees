@@ -1,23 +1,31 @@
 """
-LLM Service - OpenAI integration
+LLM Service - OpenAI integration with Instructor
 Labelowanie klastrow, generowanie sugestii refinementu, opisy po polsku.
+Uzywa instructor do structured outputs z modelami Pydantic.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 
+import instructor
 from openai import AsyncOpenAI
 
 from config import (
     OPENAI_API_KEY,
+    LLM_BASE_URL,
     LLM_MODEL,
     LLM_TEMPERATURE,
     LLM_MAX_TOKENS,
     LLM_RETRY_COUNT,
+)
+from schemas import (
+    ClusterLabelResponse,
+    RefinementSuggestionsResponse,
+    LLMSuggestion,
+    RefineAnalysis,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,13 +59,18 @@ Jestes ekspertem od optymalizacji kategoryzacji tekstu.
 Przegladasz wynik klasteryzacji dokumentow z contact center bankowego.
 Twoim zadaniem jest zaproponowanie ulepszen, takich jak:
 
-1. MERGE (polaczenie) - jezeli dwa klastry sa bardzo podobne tematycznie
-2. SPLIT (podzial) - jezeli klaster ma wyraznie dwie podgrupy tematyczne
-3. RENAME (zmiana nazwy) - jezeli nazwa jest niejasna lub nieadekwatna
-4. RECLASSIFY (reklasyfikacja) - jezeli czesc dokumentow lepiej pasuje do innego klastra
+1. MERGE (polaczenie) - jezeli dwa lub wiecej klastrow sa bardzo podobne tematycznie
+2. RENAME (zmiana nazwy) - jezeli nazwa jest niejasna lub nieadekwatna
+3. RECLASSIFY (reklasyfikacja) - jezeli jeden lub wiecej klastrow powinno byc podzielonych na mniejsze, bardziej spójne grupy
 
 Kazdej sugestii przypisz confidence (0.0 do 1.0). Podaj max 5 sugestii.
-Odpowiedz WYLACZNIE poprawnym JSON array, bez dodatkowego tekstu.\
+
+Dodatkowo przeprowadz analize klasteryzacji:
+- Oblicz srednia koherencje wszystkich klastrow
+- Zidentyfikuj problematyczne klastry (koherencja < 0.5)
+- Zaproponuj optymalna liczbe klastrow na podstawie analizy
+
+Odpowiedz uzywajac strukturyzowanego formatu zgodnego z modelem Pydantic.\
 """
 
 REFINEMENT_USER_PROMPT = """\
@@ -67,31 +80,42 @@ Wynik klasteryzacji ({total_docs} dokumentow, {num_clusters} klastrow):
 
 Dokumenty nieskategoryzowane (szum): {noise_count}
 
+Srednia koherencja wszystkich klastrow: {avg_coherence:.1%}
+Problematyczne klastry (koherencja < 50%): {problematic_clusters}
+
 {focus_section}
 
 {previous_section}
 
-Zaproponuj ulepszenia. Odpowiedz jako JSON array:
-[
-  {{
-    "type": "merge|split|rename|reclassify",
-    "description": "opis sugestii po polsku",
-    "targetClusterIds": [id1, id2],
-    "suggestedLabel": "opcjonalnie nowa nazwa",
-    "confidence": 0.82
-  }}
-]\
+Zaproponuj ulepszenia (max 5 sugestii) oraz przeprowadz analize klasteryzacji.
+Dla kazdej sugestii podaj:
+- type: "merge" | "rename" | "reclassify"
+- description: opis sugestii po polsku
+- targetClusterIds: lista ID klastrow dotknietych sugestia
+  * dla reclassify: [clusterId1, clusterId2, ...] - lista klastrow do reklasyfikacji (będą podzielone na nowe)
+  * dla merge: [clusterId1, clusterId2, ...] - lista klastrow do polaczenia
+  * dla rename: [clusterId] - pojedynczy klaster do przemianowania
+- suggestedLabel: opcjonalnie nowa nazwa (dla rename/merge)
+- confidence: wartosc od 0.0 do 1.0
+
+W analizie podaj:
+- overallCoherence: srednia koherencja wszystkich klastrow (0.0-1.0)
+- problematicClusters: lista ID klastrow z niska koherencja (< 0.5)
+- suggestedOptimalK: sugerowana optymalna liczba klastrow
+- focusAreasAnalyzed: lista obszarow na ktorych sie skupiles\
 """
 
 
 class LLMService:
     """
-    Serwis LLM oparty o OpenAI API.
+    Serwis LLM oparty o OpenAI API z Instructor.
     Odpowiada za labelowanie klastrow i generowanie sugestii refinementu.
+    Uzywa structured outputs z modelami Pydantic.
     """
 
     def __init__(self) -> None:
         self.client: AsyncOpenAI | None = None
+        self.instructor_client: instructor.Instructor | None = None
         self.model = LLM_MODEL
         self.temperature = LLM_TEMPERATURE
         self.max_tokens = LLM_MAX_TOKENS
@@ -100,25 +124,31 @@ class LLMService:
     def _ensure_client(self) -> None:
         if self.client is None:
             if not OPENAI_API_KEY:
-                raise RuntimeError(
-                    "OPENAI_API_KEY nie jest ustawiony. "
-                    "Ustaw zmienna srodowiskowa lub dodaj do .env"
-                )
-            self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+                raise RuntimeError("OPENAI_API_KEY nie jest ustawiony. " "Ustaw zmienna srodowiskowa lub dodaj do .env")
+            client_kwargs: dict = {"api_key": OPENAI_API_KEY}
+            if LLM_BASE_URL:
+                client_kwargs["base_url"] = LLM_BASE_URL
+            self.client = AsyncOpenAI(**client_kwargs)
+            # Create instructor client for structured outputs
+            self.instructor_client = instructor.from_openai(self.client)
 
-    async def _call_llm(
+    async def _call_llm_structured(
         self,
+        response_model: type,
         system_prompt: str,
         user_prompt: str,
-    ) -> str:
+    ):
         """
-        Wywoluje OpenAI API z retry i error handling.
+        Wywoluje OpenAI API z structured output przez Instructor.
+        Automatycznie parsuje odpowiedz do modelu Pydantic.
         """
         self._ensure_client()
+        if self.instructor_client is None:
+            raise RuntimeError("Instructor client not initialized")
 
         for attempt in range(self.retry_count):
             try:
-                response = await self.client.chat.completions.create(
+                response = await self.instructor_client.chat.completions.create(
                     model=self.model,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
@@ -126,40 +156,18 @@ class LLMService:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    response_format={"type": "json_object"},
+                    response_model=response_model,
                 )
-                content = response.choices[0].message.content
-                if content:
-                    return content.strip()
-                raise ValueError("Pusta odpowiedz od LLM")
+                return response
 
             except Exception as e:
-                logger.warning(
-                    f"LLM attempt {attempt + 1}/{self.retry_count} failed: {e}"
-                )
+                logger.warning(f"LLM attempt {attempt + 1}/{self.retry_count} failed: {e}")
                 if attempt < self.retry_count - 1:
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    await asyncio.sleep(2**attempt)  # Exponential backoff
                 else:
                     raise
 
         raise RuntimeError("LLM: wszystkie proby wyczerpane")
-
-    def _parse_json(self, text: str, fallback: dict | list | None = None):
-        """Bezpieczne parsowanie JSON z fallbackiem."""
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Probuj wyciagnac JSON z tekstu
-            for start_char, end_char in [("{", "}"), ("[", "]")]:
-                start = text.find(start_char)
-                end = text.rfind(end_char)
-                if start != -1 and end != -1 and end > start:
-                    try:
-                        return json.loads(text[start : end + 1])
-                    except json.JSONDecodeError:
-                        continue
-            logger.error(f"Nie udalo sie sparsowac JSON: {text[:200]}")
-            return fallback
 
     async def label_cluster(
         self,
@@ -170,14 +178,12 @@ class LLMService:
         keywords: list[str],
     ) -> dict:
         """
-        Generuje etykiete i opis dla jednego klastra.
+        Generuje etykiete i opis dla jednego klastra uzywajac Instructor.
 
         Returns:
             {"label": "...", "description": "..."}
         """
-        samples_text = "\n".join(
-            f'{i + 1}. "{text}"' for i, text in enumerate(sample_texts[:5])
-        )
+        samples_text = "\n".join(f'{i + 1}. "{text}"' for i, text in enumerate(sample_texts[:8]))
         keywords_text = ", ".join(keywords[:7])
 
         user_prompt = LABELING_USER_PROMPT.format(
@@ -189,11 +195,14 @@ class LLMService:
         )
 
         try:
-            result_text = await self._call_llm(LABELING_SYSTEM_PROMPT, user_prompt)
-            parsed = self._parse_json(result_text, {"label": f"Klaster {cluster_id}", "description": ""})
+            response = await self._call_llm_structured(
+                ClusterLabelResponse,
+                LABELING_SYSTEM_PROMPT,
+                user_prompt,
+            )
             return {
-                "label": parsed.get("label", f"Klaster {cluster_id}"),
-                "description": parsed.get("description", ""),
+                "label": response.label,
+                "description": response.description,
             }
         except Exception as e:
             logger.error(f"LLM labeling failed for cluster {cluster_id}: {e}")
@@ -302,74 +311,74 @@ class LLMService:
         # Previous suggestions
         previous_section = ""
         if previous_suggestions:
-            prev_lines = [
-                f"- [{s.get('type', '?')}] {s.get('description', '')}"
-                for s in previous_suggestions
-            ]
+            prev_lines = [f"- [{s.get('type', '?')}] {s.get('description', '')}" for s in previous_suggestions]
             previous_section = (
                 "Ponizsze sugestie zostaly juz wczesniej zaproponowane "
                 "(NIE powtarzaj ich):\n" + "\n".join(prev_lines)
             )
+
+        # Calculate average coherence for prompt
+        avg_coherence = sum(coherence_values) / len(coherence_values) if coherence_values else 0.0
+        problematic_clusters_str = ", ".join(map(str, problematic)) if problematic else "brak"
 
         user_prompt = REFINEMENT_USER_PROMPT.format(
             total_docs=total_docs,
             num_clusters=len(topics),
             clusters_description=clusters_description,
             noise_count=noise_count,
+            avg_coherence=avg_coherence,
+            problematic_clusters=problematic_clusters_str,
             focus_section=focus_section,
             previous_section=previous_section,
         )
 
         try:
-            result_text = await self._call_llm(
-                REFINEMENT_SYSTEM_PROMPT, user_prompt
+            # Use instructor for structured output
+            response = await self._call_llm_structured(
+                RefinementSuggestionsResponse,
+                REFINEMENT_SYSTEM_PROMPT,
+                user_prompt,
             )
-            parsed = self._parse_json(result_text, [])
 
-            # Normalizuj - moze byc {"suggestions": [...]} lub [...]
-            if isinstance(parsed, dict):
-                suggestions_raw = parsed.get("suggestions", parsed.get("items", []))
-            elif isinstance(parsed, list):
-                suggestions_raw = parsed
-            else:
-                suggestions_raw = []
-
-            # Walidacja i normalizacja sugestii
+            # Convert Pydantic models to dict format
             suggestions = []
-            for s in suggestions_raw[:5]:
-                suggestion_type = s.get("type", "rename")
-                if suggestion_type not in ("merge", "split", "rename", "reclassify"):
-                    continue
+            for suggestion in response.suggestions[:5]:
+                suggestion_dict = {
+                    "type": suggestion.type,
+                    "description": suggestion.description,
+                    "targetClusterIds": suggestion.target_cluster_ids,
+                    "suggestedLabel": suggestion.suggested_label,
+                    "confidence": suggestion.confidence,
+                    "applied": suggestion.applied,
+                }
+                suggestions.append(suggestion_dict)
 
-                suggestions.append({
-                    "type": suggestion_type,
-                    "description": s.get("description", ""),
-                    "targetClusterIds": s.get("targetClusterIds", []),
-                    "suggestedLabel": s.get("suggestedLabel"),
-                    "confidence": max(0.0, min(1.0, float(s.get("confidence", 0.5)))),
-                    "applied": False,
-                })
+            # Use analysis from LLM response
+            analysis = {
+                "overallCoherence": response.analysis.overall_coherence,
+                "problematicClusters": response.analysis.problematic_clusters,
+                "suggestedOptimalK": response.analysis.suggested_optimal_k,
+                "focusAreasAnalyzed": response.analysis.focus_areas_analyzed,
+            }
+
+            return {
+                "suggestions": suggestions,
+                "analysis": analysis,
+            }
 
         except Exception as e:
             logger.error(f"LLM refinement failed: {e}")
-            suggestions = []
-
-        # Oblicz analize
-        overall_coherence = (
-            sum(coherence_values) / len(coherence_values)
-            if coherence_values
-            else 0.0
-        )
-
-        return {
-            "suggestions": suggestions,
-            "analysis": {
-                "overallCoherence": round(overall_coherence, 3),
-                "problematicClusters": problematic,
-                "suggestedOptimalK": max(2, len(topics)),
-                "focusAreasAnalyzed": focus_areas or [],
-            },
-        }
+            # Fallback: calculate basic analysis
+            overall_coherence = sum(coherence_values) / len(coherence_values) if coherence_values else 0.0
+            return {
+                "suggestions": [],
+                "analysis": {
+                    "overallCoherence": round(overall_coherence, 3),
+                    "problematicClusters": problematic,
+                    "suggestedOptimalK": max(2, len(topics)),
+                    "focusAreasAnalyzed": focus_areas or [],
+                },
+            }
 
     async def health_check(self) -> dict:
         """Sprawdza status serwisu LLM."""

@@ -12,12 +12,11 @@ from typing import Literal
 
 ClusteringAlgorithm = Literal["hdbscan", "kmeans", "agglomerative"]
 DimReductionMethod = Literal["umap", "pca", "tsne", "none"]
-JobStatus = Literal[
-    "queued", "embedding", "reducing", "clustering", "labeling", "completed", "failed"
-]
+JobStatus = Literal["queued", "embedding", "reducing", "clustering", "labeling", "completed", "failed"]
 
 
 # ===== Config =====
+
 
 class ClusteringConfig(BaseModel):
     granularity: Literal["low", "medium", "high"] = "medium"
@@ -33,6 +32,7 @@ class ClusteringConfig(BaseModel):
 
 
 # ===== Typy bazowe =====
+
 
 class DocumentItem(BaseModel):
     id: str
@@ -60,14 +60,29 @@ class ClusterTopic(BaseModel):
 
 
 class LLMSuggestion(BaseModel):
-    type: Literal["merge", "split", "rename", "reclassify"]
+    type: Literal["merge", "rename", "reclassify"]
     description: str
     target_cluster_ids: list[int] = Field(alias="targetClusterIds")
     suggested_label: str | None = Field(None, alias="suggestedLabel")
-    confidence: float
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score between 0.0 and 1.0")
     applied: bool = False
+    blocked: bool = Field(default=False, description="True if suggestion conflicts with an applied suggestion")
 
     model_config = {"populate_by_name": True}
+
+
+class ClusterLabelResponse(BaseModel):
+    """Response model for cluster labeling."""
+
+    label: str = Field(description="Short descriptive label (max 5 words, in Polish)")
+    description: str = Field(description="One-sentence description of the cluster category")
+
+
+class RefinementSuggestionsResponse(BaseModel):
+    """Response model for refinement suggestions from LLM."""
+
+    suggestions: list[LLMSuggestion] = Field(description="List of refinement suggestions (max 5)", max_length=5)
+    analysis: RefineAnalysis = Field(description="Analysis of the clustering result")
 
 
 class ClusteringResult(BaseModel):
@@ -82,6 +97,7 @@ class ClusteringResult(BaseModel):
 
 
 # ===== Job =====
+
 
 class JobInfo(BaseModel):
     job_id: str = Field(alias="jobId")
@@ -99,6 +115,7 @@ class JobInfo(BaseModel):
 
 # ===== Requesty =====
 
+
 class ClusterRequest(BaseModel):
     texts: list[str]
     config: ClusteringConfig = Field(default_factory=ClusteringConfig)
@@ -107,6 +124,7 @@ class ClusterRequest(BaseModel):
 
 class ReclusterRequest(BaseModel):
     """Recluster using cached embeddings from a previous job."""
+
     job_id: str = Field(alias="jobId")
     config: ClusteringConfig
 
@@ -116,12 +134,8 @@ class ReclusterRequest(BaseModel):
 class RefineRequest(BaseModel):
     topics: list[ClusterTopic]
     documents: list[DocumentItem]
-    previous_suggestions: list[LLMSuggestion] = Field(
-        default_factory=list, alias="previousSuggestions"
-    )
-    focus_areas: list[str] = Field(
-        default=["coherence", "granularity", "naming"], alias="focusAreas"
-    )
+    previous_suggestions: list[LLMSuggestion] = Field(default_factory=list, alias="previousSuggestions")
+    focus_areas: list[str] = Field(default=["coherence", "granularity", "naming"], alias="focusAreas")
 
     model_config = {"populate_by_name": True}
 
@@ -129,6 +143,7 @@ class RefineRequest(BaseModel):
 class RenameRequest(BaseModel):
     topic_id: int = Field(alias="topicId")
     new_label: str = Field(alias="newLabel")
+    job_id: str | None = Field(None, alias="jobId")
 
     model_config = {"populate_by_name": True}
 
@@ -138,25 +153,19 @@ class MergeRequest(BaseModel):
     new_label: str = Field(alias="newLabel")
     documents: list[DocumentItem]
     topics: list[ClusterTopic]
-
-    model_config = {"populate_by_name": True}
-
-
-class SplitRequest(BaseModel):
-    cluster_id: int = Field(alias="clusterId")
-    num_subclusters: int = Field(default=2, alias="numSubclusters")
-    documents: list[DocumentItem]
-    topics: list[ClusterTopic]
+    job_id: str | None = Field(None, alias="jobId")
 
     model_config = {"populate_by_name": True}
 
 
 class ReclassifyRequest(BaseModel):
-    document_ids: list[str] = Field(alias="documentIds")
-    from_cluster_id: int = Field(alias="fromClusterId")
-    to_cluster_id: int = Field(alias="toClusterId")
+    from_cluster_ids: list[int] = Field(
+        alias="fromClusterIds", description="List of source cluster IDs to reclassify (must be > 1)"
+    )
+    num_clusters: int = Field(alias="numClusters", description="Desired number of new clusters")
     documents: list[DocumentItem]
     topics: list[ClusterTopic]
+    job_id: str | None = Field(None, alias="jobId")
 
     model_config = {"populate_by_name": True}
 
@@ -172,6 +181,7 @@ class ExportRequest(BaseModel):
 
 
 # ===== Responsy =====
+
 
 class PipelineMeta(BaseModel):
     pipeline_duration_ms: int = Field(alias="pipelineDurationMs")
@@ -223,3 +233,17 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+class GenerateLabelsRequest(BaseModel):
+    topic_ids: list[int] = Field(alias="topicIds", description="List of topic IDs to generate labels for")
+    topics: list[ClusterTopic]
+    documents: list[DocumentItem]
+    job_id: str | None = Field(None, alias="jobId")
+
+    model_config = {"populate_by_name": True}
+
+
+class GenerateLabelsResponse(BaseModel):
+    updated_topics: list[ClusterTopic] = Field(alias="updatedTopics")
+    timestamp: str

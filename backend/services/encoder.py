@@ -95,6 +95,7 @@ class EncoderService:
         texts: list[str],
         batch_size: int | None = None,
         normalize: bool = True,
+        progress_callback: callable | None = None,
     ) -> np.ndarray:
         """
         Generuje embeddingi dla listy tekstow.
@@ -103,6 +104,7 @@ class EncoderService:
             texts: Lista tekstow do enkodowania
             batch_size: Rozmiar batcha (domyslnie z konfiguracji)
             normalize: Czy L2 normalizowac wektory
+            progress_callback: Opcjonalna funkcja callback(batch_num, total_batches, processed, total)
 
         Returns:
             np.ndarray o ksztalcie (len(texts), embedding_dim)
@@ -112,9 +114,11 @@ class EncoderService:
 
         bs = batch_size or self.batch_size
         all_embeddings: list[np.ndarray] = []
+        total_batches = (len(texts) + bs - 1) // bs
 
         for i in range(0, len(texts), bs):
             batch_texts = texts[i : i + bs]
+            batch_num = i // bs + 1
 
             encoded = self.tokenizer(
                 batch_texts,
@@ -133,8 +137,15 @@ class EncoderService:
 
             all_embeddings.append(embeddings.cpu().numpy())
 
+            # Call progress callback if provided
+            if progress_callback:
+                try:
+                    progress_callback(batch_num, total_batches, min(i + bs, len(texts)), len(texts))
+                except Exception as e:
+                    logger.warning(f"Progress callback error: {e}")
+
             logger.debug(
-                f"Batch {i // bs + 1}/{(len(texts) + bs - 1) // bs}: "
+                f"Batch {batch_num}/{total_batches}: "
                 f"{len(batch_texts)} tekstow"
             )
 
