@@ -602,7 +602,7 @@ export function ClusterScatterPlot({
         </span>
         <span className="text-[10px] text-muted-foreground/40">|</span>
         <span className="text-[10px] text-muted-foreground/60">
-          {result.documents.length} dokumentow w {result.topics.length} klastrach
+          {result.documents.length} dokumentów w {result.topics.length} klastrach
         </span>
       </div>
     </div>

@@ -112,6 +112,20 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
   })
 }
 
+/**
+ * List available encoder models (for advanced config).
+ * When backend is disabled, returns empty list (frontend will show default only).
+ */
+export async function listEncoders(): Promise<{ models: string[] }> {
+  try {
+    return await apiRequest<{ models: string[] }>("/api/cluster/encoders", {
+      method: "GET",
+    })
+  } catch {
+    return { models: [] }
+  }
+}
+
 // ===== Fetch job result (when completed) =====
 
 /**

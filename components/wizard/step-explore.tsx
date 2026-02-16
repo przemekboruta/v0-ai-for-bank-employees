@@ -63,6 +63,16 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     ? result.topics.find((t) => t.id === selectedDoc.clusterId) ?? null
     : null
 
+  const timeAgo = (iso: string) => {
+    const diffMs = Date.now() - new Date(iso).getTime()
+    const diffMin = Math.floor(diffMs / 60_000)
+    const diffH = Math.floor(diffMin / 60)
+    if (diffMin < 1) return "przed chwilą"
+    if (diffMin < 60) return `${diffMin} min temu`
+    if (diffH < 24) return `${diffH} godz. temu`
+    return `${Math.floor(diffH / 24)} dni temu`
+  }
+
   const handleExport = async () => {
     try {
       const blob = await exportReport(result, "csv", { language: "pl" })
@@ -88,7 +98,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     lines.push("================================")
     lines.push("")
     lines.push(`Data: ${new Date().toLocaleDateString("pl-PL")}`)
-    lines.push(`Liczba dokumentow: ${result.totalDocuments}`)
+    lines.push(`Liczba dokumentów: ${result.totalDocuments}`)
     lines.push(`Liczba wykrytych kategorii: ${result.topics.length}`)
     lines.push(`Dokumenty nieskategoryzowane (szum): ${result.noise}`)
     lines.push("")
@@ -160,15 +170,15 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     <div className="flex flex-col gap-6">
       {/* Top bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1.5">
           <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-            Mapa tematow
+            Mapa tematów
           </h2>
           <p className="text-sm text-muted-foreground">
             {filteredDocs.length}
             {filteredDocs.length !== result.totalDocuments &&
               ` / ${result.totalDocuments}`}{" "}
-            dokumentow w {result.topics.length} kategoriach
+            dokumentów w {result.topics.length} kategoriach
             {selectedTopic && (
               <span>
                 {" / Filtr: "}
@@ -186,6 +196,24 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
               </span>
             )}
           </p>
+          {result.meta && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span title="Model encodera">
+                Encoder: <span className="font-mono text-foreground/80">{result.meta.encoderModel}</span>
+              </span>
+              <span>
+                {result.totalDocuments} dokumentów
+              </span>
+              <span title="Metoda grupowania">
+                Metoda: <span className="text-foreground/80">{result.meta.algorithm.toUpperCase()}</span>
+              </span>
+              {result.meta.completedAt && (
+                <span title={result.meta.completedAt}>
+                  {timeAgo(result.meta.completedAt)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -218,7 +246,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
         <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
         <input
           type="text"
-          placeholder="Szukaj w tresci dokumentow..."
+          placeholder="Szukaj w treści dokumentów..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
@@ -399,7 +427,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
               </Table>
               {filteredDocs.length > 100 && (
                 <div className="border-t border-white/[0.04] px-4 py-3 text-center text-xs text-muted-foreground">
-                  Wyswietlono 100 z {filteredDocs.length} dokumentow. Uzyj
+                  Wyświetlono 100 z {filteredDocs.length} dokumentów. Użyj
                   wyszukiwania lub filtrow, aby zawezic wyniki.
                 </div>
               )}
@@ -444,7 +472,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
                         {topic.documentCount}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        dokumentow (
+                        dokumentów (
                         {(
                           (topic.documentCount / result.totalDocuments) *
                           100

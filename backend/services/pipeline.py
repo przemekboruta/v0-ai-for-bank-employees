@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 from sklearn.cluster import KMeans
@@ -33,10 +34,10 @@ class PipelineService:
         self.llm = LLMService()
         self.jobs = JobQueueService.get_instance()
 
-    async def _encode_with_progress(self, job_id: str, texts: list[str]) -> np.ndarray:
+    async def _encode_with_progress(self, job_id: str, texts: list[str], config: dict) -> np.ndarray:
         """
         Encode texts in executor with progress updates.
-        This prevents blocking the event loop during long encoding operations.
+        If config has encoderModel (and optionally encoderPrefix), use that single model; else default.
         """
         import queue
         import threading
@@ -44,6 +45,8 @@ class PipelineService:
         progress_queue: queue.Queue = queue.Queue()
         result_queue: queue.Queue = queue.Queue()
         error_queue: queue.Queue = queue.Queue()
+        encoder_model = config.get("encoderModel") or config.get("encoder_model")
+        encoder_prefix = config.get("encoderPrefix") or config.get("encoder_prefix") or ""
 
         def encode_task():
             """Run encoding in thread with progress callbacks."""
@@ -53,7 +56,15 @@ class PipelineService:
                     """Callback to report progress."""
                     progress_queue.put((batch_num, total_batches, processed, total))
 
-                result = self.encoder.encode(texts, progress_callback=progress_callback)
+                if encoder_model:
+                    result = self.encoder.encode_single_model(
+                        texts,
+                        model_name=encoder_model,
+                        prefix=encoder_prefix,
+                        progress_callback=progress_callback,
+                    )
+                else:
+                    result = self.encoder.encode(texts, progress_callback=progress_callback)
                 result_queue.put(result)
             except Exception as e:
                 error_queue.put(e)
@@ -141,7 +152,7 @@ class PipelineService:
             # === Step 1: Embeddings (or cache) ===
             if use_cached:
                 await self.jobs.update_job(
-                    job_id, status="embedding", progress=5, current_step="Ladowanie embeddingów z cache..."
+                    job_id, status="embedding", progress=5, current_step="Ładowanie embeddingów z cache..."
                 )
                 embeddings = await self.jobs.get_cached_embeddings(cached_job_id)
                 if embeddings is None:
@@ -149,7 +160,7 @@ class PipelineService:
                     logger.warning(f"Cache miss for {cached_job_id}, recomputing")
                     await self.jobs.update_job(job_id, current_step="Cache miss -- generowanie embeddingów od nowa...")
                     # Run encoding in executor with progress updates
-                    embeddings = await self._encode_with_progress(job_id, texts)
+                    embeddings = await self._encode_with_progress(job_id, texts, config)
                     await self.jobs.cache_embeddings(job_id, embeddings)
                 else:
                     logger.info(f"Using cached embeddings from job {cached_job_id}")
@@ -163,7 +174,7 @@ class PipelineService:
                     current_step=f"Generowanie embeddingów ({len(texts)} tekstów)...",
                 )
                 # Run encoding in executor with progress updates
-                embeddings = await self._encode_with_progress(job_id, texts)
+                embeddings = await self._encode_with_progress(job_id, texts, config)
                 await self.jobs.cache_embeddings(job_id, embeddings)
 
             await self.jobs.update_job(job_id, progress=35)
@@ -251,7 +262,10 @@ class PipelineService:
                 "jobId": job_id,
                 "meta": {
                     "pipelineDurationMs": pipeline_duration,
-                    "encoderModel": self.encoder.model_name,
+                    "encoderModel": self.encoder.get_display_name(
+                        config.get("encoderModel") or config.get("encoder_model"),
+                        config.get("encoderPrefix") or config.get("encoder_prefix"),
+                    ),
                     "algorithm": algorithm,
                     "dimReduction": dim_reduction,
                     "dimReductionTarget": dim_target,
@@ -259,6 +273,7 @@ class PipelineService:
                     "llmModel": self.llm.model,
                     "iteration": iteration,
                     "usedCachedEmbeddings": bool(use_cached),
+                    "completedAt": datetime.now(timezone.utc).isoformat(),
                 },
             }
 
@@ -371,7 +386,7 @@ class PipelineService:
         other_docs = [d for d in documents if d.get("clusterId") not in from_set]
 
         if len(docs_to_reclassify) < num_clusters * 3:
-            raise ValueError(f"Za malo dokumentow ({len(docs_to_reclassify)}) dla {num_clusters} klastrow")
+            raise ValueError(f"Za mało dokumentów ({len(docs_to_reclassify)}) dla {num_clusters} klastrów")
 
         # Get embeddings and run KMeans
         new_labels = None

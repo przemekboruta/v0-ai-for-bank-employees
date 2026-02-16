@@ -36,7 +36,7 @@ export async function POST(request: Request) {
         {
           error: {
             code: "INVALID_INPUT",
-            message: "Pole 'fromClusterIds' jest wymagane i musi zawierac co najmniej 1 id.",
+            message: "Pole 'fromClusterIds' jest wymagane i musi zawierać co najmniej 1 id.",
           },
         },
         { status: 400 }
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
         {
           error: {
             code: "INVALID_INPUT",
-            message: "Pole 'numClusters' jest wymagane i musi byc wieksze od 0.",
+            message: "Pole 'numClusters' jest wymagane i musi być większe od 0.",
           },
         },
         { status: 400 }
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
         {
           error: {
             code: "INVALID_INPUT",
-            message: "Pola 'documents' i 'topics' sa wymagane.",
+            message: "Pola 'documents' i 'topics' są wymagane.",
           },
         },
         { status: 400 }
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
       {
         error: {
           code: "PIPELINE_ERROR",
-          message: "Nie udalo sie reklasyfikowac dokumentow.",
+          message: "Nie udało się reklasyfikować dokumentów.",
         },
       },
       { status: 500 }

@@ -23,6 +23,10 @@ export interface ClusteringConfig {
   useCachedEmbeddings: boolean
   /** Previous job ID whose embeddings to reuse */
   cachedJobId: string | null
+  /** Encoder model name (from backend list); empty = backend default */
+  encoderModel: string | null
+  /** Optional prefix prepended to each text before encoding */
+  encoderPrefix: string | null
 }
 
 export const DEFAULT_CLUSTERING_CONFIG: ClusteringConfig = {
@@ -34,6 +38,8 @@ export const DEFAULT_CLUSTERING_CONFIG: ClusteringConfig = {
   minClusterSize: 5,
   useCachedEmbeddings: false,
   cachedJobId: null,
+  encoderModel: null,
+  encoderPrefix: null,
 }
 
 /** Job status from the queue */
@@ -80,6 +86,20 @@ export interface LLMSuggestion {
   blocked?: boolean // True if suggestion conflicts with an applied suggestion
 }
 
+/** Pipeline meta (returned with result from backend) */
+export interface PipelineMeta {
+  pipelineDurationMs: number
+  encoderModel: string
+  algorithm: string
+  dimReduction: string
+  dimReductionTarget: number
+  clusteringParams: Record<string, unknown>
+  llmModel: string
+  iteration: number
+  usedCachedEmbeddings: boolean
+  completedAt?: string
+}
+
 export interface ClusteringResult {
   documents: DocumentItem[]
   topics: ClusterTopic[]
@@ -87,6 +107,8 @@ export interface ClusteringResult {
   totalDocuments: number
   noise: number
   jobId?: string
+  /** Set when result comes from backend (includes encoder, algorithm, completedAt) */
+  meta?: PipelineMeta
 }
 
 export type WizardStep = "dashboard" | "upload" | "configure" | "processing" | "review" | "explore"

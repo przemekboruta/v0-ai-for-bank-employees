@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import HOST, PORT, CORS_ORIGINS, ENCODER_MODEL_NAME, LLM_BASE_URL, LLM_MODEL, REDIS_URL
+from config import HOST, PORT, CORS_ORIGINS, ENCODER_MODELS, LLM_BASE_URL, LLM_MODEL, REDIS_URL
 from services.encoder import EncoderService
 from services.job_queue import JobQueueService
 
@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("Topic Discovery Hub - Backend Start")
-    logger.info(f"  Encoder: {ENCODER_MODEL_NAME}")
+    logger.info(
+        f"  Encoder: {', '.join(c['model'] + (f" (prefix: {c.get('prefix', '')!r})" if c.get('prefix') else '') for c in ENCODER_MODELS)}"
+    )
     logger.info(f"  LLM:     {LLM_MODEL}" + (f" (base_url: {LLM_BASE_URL})" if LLM_BASE_URL else ""))
     logger.info(f"  Redis:   {REDIS_URL}")
     logger.info(f"  CORS:    {CORS_ORIGINS}")

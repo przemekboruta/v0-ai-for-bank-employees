@@ -27,6 +27,8 @@ class ClusteringConfig(BaseModel):
     min_cluster_size: int = Field(default=5, alias="minClusterSize")
     use_cached_embeddings: bool = Field(default=False, alias="useCachedEmbeddings")
     cached_job_id: str | None = Field(default=None, alias="cachedJobId")
+    encoder_model: str | None = Field(default=None, alias="encoderModel")
+    encoder_prefix: str | None = Field(default=None, alias="encoderPrefix")
 
     model_config = {"populate_by_name": True}
 
@@ -193,6 +195,7 @@ class PipelineMeta(BaseModel):
     llm_model: str = Field(alias="llmModel")
     iteration: int
     used_cached_embeddings: bool = Field(default=False, alias="usedCachedEmbeddings")
+    completed_at: str | None = Field(default=None, alias="completedAt")
 
     model_config = {"populate_by_name": True}
 

@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Upload, FileText, X, Database, Columns, Eye, ChevronDown } from "lucide-react"
 import { generateSampleTexts } from "@/lib/mock-clustering"
 import { cn } from "@/lib/utils"
+import * as XLSX from "xlsx"
 
 interface StepUploadProps {
   onTextsLoaded: (texts: string[]) => void
@@ -20,25 +21,82 @@ interface ParsedCSV {
   raw: string
 }
 
+/** Split content into lines; newlines inside double-quoted fields are preserved (RFC 4180). */
+function splitCSVRows(content: string): string[] {
+  const rows: string[] = []
+  let current = ""
+  let inQuotes = false
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i]
+    if (c === '"') {
+      inQuotes = !inQuotes
+      current += c
+    } else if (!inQuotes && (c === "\n" || (c === "\r" && content[i + 1] === "\n"))) {
+      rows.push(current)
+      current = ""
+      if (c === "\r") i++
+    } else {
+      current += c
+    }
+  }
+  if (current.length > 0) rows.push(current)
+  return rows
+}
+
+/** Parse a single CSV row into fields; delimiter inside double-quoted fields is preserved. */
+function parseCSVRow(line: string, delimiter: string): string[] {
+  const fields: string[] = []
+  let current = ""
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (c === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i++
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (!inQuotes && c === delimiter) {
+      fields.push(unquoteField(current))
+      current = ""
+    } else {
+      current += c
+    }
+  }
+  fields.push(unquoteField(current))
+  return fields
+}
+
+function unquoteField(s: string): string {
+  s = s.trim()
+  if (s.startsWith('"') && s.endsWith('"')) {
+    s = s.slice(1, -1).replace(/""/g, '"')
+  }
+  return s
+}
+
 function parseCSV(content: string): ParsedCSV | null {
-  const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0)
-  if (lines.length < 2) return null
+  const rawRows = splitCSVRows(content).map((r) => r.trim()).filter((r) => r.length > 0)
+  if (rawRows.length < 2) return null
 
-  // Detect delimiter
-  const firstLine = lines[0]
-  const semicolonCount = (firstLine.match(/;/g) || []).length
-  const commaCount = (firstLine.match(/,/g) || []).length
-  const tabCount = (firstLine.match(/\t/g) || []).length
-  const delimiter = tabCount > commaCount && tabCount > semicolonCount ? "\t" : semicolonCount > commaCount ? ";" : ","
+  const firstRowStr = rawRows[0]
+  const secondRowStr = rawRows[1]
+  const tryDelimiter = (delim: string) => parseCSVRow(firstRowStr, delim).length
+  const tabCols = tryDelimiter("\t")
+  const semicolonCols = tryDelimiter(";")
+  const commaCols = tryDelimiter(",")
+  const delimiter =
+    tabCols > 1 && tabCols >= semicolonCols && tabCols >= commaCols
+      ? "\t"
+      : semicolonCols > 1 && semicolonCols >= commaCols
+        ? ";"
+        : ","
 
-  const headers = firstLine.split(delimiter).map((h) => h.replace(/^["']|["']$/g, "").trim())
-
-  // If only 1 column, it's plain text -- no column picker needed
+  const headers = parseCSVRow(firstRowStr, delimiter).map((h) => h.replace(/^["']|["']$/g, "").trim())
   if (headers.length <= 1) return null
 
-  const rows = lines.slice(1).map((line) =>
-    line.split(delimiter).map((cell) => cell.replace(/^["']|["']$/g, "").trim())
-  )
+  const rows = rawRows.slice(1).map((line) => parseCSVRow(line, delimiter))
 
   return { headers, rows, raw: content }
 }
@@ -78,8 +136,55 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
     [onTextsLoaded]
   )
 
+  const parseXLSX = useCallback((arrayBuffer: ArrayBuffer): ParsedCSV | null => {
+    const workbook = XLSX.read(arrayBuffer, { type: "array" })
+    const firstSheetName = workbook.SheetNames[0]
+    if (!firstSheetName) return null
+    const sheet = workbook.Sheets[firstSheetName]
+    const data: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+    if (data.length < 2) return null
+    const headers = (data[0] as unknown[]).map((c) => String(c ?? "").trim())
+    if (headers.length <= 1) return null
+    const rows = data.slice(1).map((row) =>
+      (row as unknown[]).map((cell) => {
+        const v = cell ?? ""
+        return typeof v === "string" ? v : String(v)
+      })
+    )
+    return { headers, rows, raw: "" }
+  }, [])
+
   const handleFile = useCallback(
     (file: File) => {
+      const isXLSX = /\.xlsx$/i.test(file.name)
+      if (isXLSX) {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          const arrayBuffer = e.target?.result as ArrayBuffer
+          if (!arrayBuffer) return
+          const parsed = parseXLSX(arrayBuffer)
+          if (parsed && parsed.headers.length > 1) {
+            setFileName(file.name)
+            setParsedCSV(parsed)
+            setSelectedColumn(null)
+            setPreviewTexts([])
+            onTextsLoaded([])
+          } else if (parsed && parsed.rows.length > 0) {
+            const singleCol = parsed.rows.map((row) => (row[0] ?? "").trim()).filter((t) => t.length > 0)
+            setFileName(file.name)
+            setParsedCSV(null)
+            setPreviewTexts(singleCol)
+            onTextsLoaded(singleCol)
+          } else {
+            setFileName(file.name)
+            setParsedCSV(null)
+            setPreviewTexts([])
+            onTextsLoaded([])
+          }
+        }
+        reader.readAsArrayBuffer(file)
+        return
+      }
       const reader = new FileReader()
       reader.onload = (e) => {
         const content = e.target?.result as string
@@ -97,7 +202,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
       }
       reader.readAsText(file)
     },
-    [onTextsLoaded, handlePlainText]
+    [onTextsLoaded, handlePlainText, parseXLSX]
   )
 
   const handleDrop = useCallback(
@@ -147,7 +252,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
         </h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
           Wgraj plik CSV lub TXT z tekstami. System automatycznie wykryje
-          kolumny w pliku CSV i pozwoli wybrac kolumne do analizy.
+          kolumny w pliku CSV i pozwoli wybrać kolumnę do analizy.
         </p>
       </div>
 
@@ -172,13 +277,13 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
               Przeciagnij plik tutaj
             </p>
             <p className="text-xs text-muted-foreground">
-              CSV, TXT, TSV (max 10MB)
+              CSV, XLSX, TXT, TSV (max 10MB)
             </p>
           </div>
           <label className="cursor-pointer">
             <input
               type="file"
-              accept=".csv,.txt,.tsv"
+              accept=".csv,.txt,.tsv,.xlsx"
               className="sr-only"
               onChange={(e) => {
                 const file = e.target.files?.[0]
@@ -202,7 +307,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
                 <p className="text-sm font-medium text-foreground">{fileName}</p>
                 <p className="text-xs text-muted-foreground">
                   {loadedCount > 0
-                    ? `${loadedCount} tekstow zaladowanych`
+                    ? `${loadedCount} tekstów załadowanych`
                     : parsedCSV
                       ? `${parsedCSV.rows.length} wierszy, ${parsedCSV.headers.length} kolumn`
                       : "Przetwarzanie..."}
@@ -213,7 +318,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
               variant="ghost"
               size="icon"
               onClick={clearFile}
-              aria-label="Usun plik"
+              aria-label="Usuń plik"
               className="text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
             >
               <X className="h-4 w-4" />
@@ -228,9 +333,9 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
                   <Columns className="h-4 w-4 text-primary" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-foreground">Wybierz kolumne do analizy</p>
+                  <p className="text-sm font-medium text-foreground">Wybierz kolumnę do analizy</p>
                   <p className="text-xs text-muted-foreground">
-                    Wykryto {parsedCSV.headers.length} kolumn. Wskaż, ktora zawiera teksty do klasteryzacji.
+                    Wykryto {parsedCSV.headers.length} kolumn. Wskaż, która zawiera teksty do klasteryzacji.
                   </p>
                 </div>
               </div>
@@ -250,7 +355,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
                   <span>
                     {selectedColumn !== null
                       ? parsedCSV.headers[selectedColumn]
-                      : "Kliknij, aby wybrac kolumne..."}
+                      : "Kliknij, aby wybrać kolumnę..."}
                   </span>
                   <ChevronDown className={cn("h-4 w-4 transition-transform", showColumnDropdown && "rotate-180")} />
                 </button>
@@ -278,7 +383,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
                             </div>
                             {sampleValue && (
                               <p className="text-xs text-muted-foreground truncate">
-                                Przyklad: &quot;{sampleValue.substring(0, 80)}{sampleValue.length > 80 ? "..." : ""}&quot;
+                                Przykład: &quot;{sampleValue.substring(0, 80)}{sampleValue.length > 80 ? "..." : ""}&quot;
                               </p>
                             )}
                           </button>
@@ -308,7 +413,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
                       Podglad danych
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {previewTexts.length} tekstow gotowych do analizy
+                      {previewTexts.length} tekstów gotowych do analizy
                     </p>
                   </div>
                 </div>
@@ -334,7 +439,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
                       ))}
                       {previewTexts.length > 20 && (
                         <p className="text-center text-xs text-muted-foreground py-2">
-                          ...i {previewTexts.length - 20} wiecej
+                          ...i {previewTexts.length - 20} więcej
                         </p>
                       )}
                     </div>
@@ -358,7 +463,7 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
         onClick={handleDemoData}
       >
         <Database className="h-4 w-4" />
-        Uzyj przykladowych danych bankowych
+        Użyj przykładowych danych bankowych
       </Button>
     </div>
   )

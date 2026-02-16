@@ -810,7 +810,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
               className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
             >
               <XCircle className="h-3.5 w-3.5" />
-              Odrzuc wszystkie
+              Odrzuć wszystkie
             </Button>
           </div>
         )}
@@ -824,7 +824,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
           className="gap-1.5 self-start border-white/[0.1] bg-transparent text-muted-foreground hover:border-white/[0.2] hover:text-foreground hover:bg-white/[0.04]"
         >
           <Sparkles className={cn("h-3.5 w-3.5", isRefining && "animate-spin")} />
-          {isRefining ? "Analizuje..." : "Popros AI o wiecej sugestii"}
+          {isRefining ? "Analizuje…" : "Poproś AI o więcej sugestii"}
         </Button>
 
         {pendingSuggestions.length === 0 && appliedSuggestions.length === 0 && blockedSuggestions.length === 0 && (
@@ -947,7 +947,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                         className="gap-1 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
                       >
                         <X className="h-3 w-3" />
-                        Odrzuc
+                        Odrzuć
                       </Button>
                       <Button
                         size="sm"
@@ -1113,7 +1113,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                        Przyklady
+                        Przykłady
                       </span>
                       {topic.sampleTexts.map((sample, sIdx) => (
                         <p

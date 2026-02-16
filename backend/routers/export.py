@@ -119,7 +119,7 @@ async def export_results(req: ExportRequest):
     lines.append("=" * 50)
     lines.append("")
     lines.append(f"{'Data' if pl else 'Date'}: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-    lines.append(f"{'Liczba dokumentow' if pl else 'Documents'}: {result.total_documents}")
+    lines.append(f"{'Liczba dokumentów' if pl else 'Documents'}: {result.total_documents}")
     lines.append(f"{'Wykryte kategorie' if pl else 'Topics found'}: {len(topics_data)}")
     lines.append(f"{'Dokumenty nieskategoryzowane' if pl else 'Noise'}: {result.noise}")
     lines.append("")

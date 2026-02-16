@@ -1,7 +1,7 @@
 """
 LLM Service - OpenAI integration with Instructor
-Labelowanie klastrow, generowanie sugestii refinementu, opisy po polsku.
-Uzywa instructor do structured outputs z modelami Pydantic.
+Labelowanie klastrów, generowanie sugestii refinementu, opisy po polsku.
+Używa instructor do structured outputs z modelami Pydantic.
 """
 
 from __future__ import annotations
@@ -33,84 +33,84 @@ logger = logging.getLogger(__name__)
 # ===== Prompty =====
 
 LABELING_SYSTEM_PROMPT = """\
-Jestes ekspertem od analizy tekstu w polskim sektorze bankowym.
-Analizujesz grupy tekstow (klastry) z contact center bankowego.
-Dla kazdej grupy musisz:
-1. Nadac krotka, opisowa nazwe kategorii (max 5 slow, po polsku)
-2. Napisac 1-zdaniowy opis kategorii
-3. Nie uzywac zbyt ogolnych nazw jak "Rozne" czy "Inne"
-4. Odpowiedz WYLACZNIE poprawnym JSON-em, bez dodatkowego tekstu\
+Jesteś ekspertem od analizy tekstu w polskim sektorze bankowym.
+Analizujesz grupy tekstów (klastry) z contact center bankowego.
+Dla każdej grupy musisz:
+1. Nadać krótką, opisową nazwę kategorii (max 5 słów, po polsku)
+2. Napisać 1-zdaniowy opis kategorii
+3. Nie używać zbyt ogólnych nazw jak "Różne" czy "Inne"
+4. Odpowiedz WYŁĄCZNIE poprawnym JSON-em, bez dodatkowego tekstu\
 """
 
 LABELING_USER_PROMPT = """\
-Klaster {cluster_id} ({doc_count} dokumentow, koherencja: {coherence}%):
+Klaster {cluster_id} ({doc_count} dokumentów, koherencja: {coherence}%):
 
 Reprezentatywne teksty:
 {samples}
 
-Slowa kluczowe TF-IDF: {keywords}
+Słowa kluczowe TF-IDF: {keywords}
 
-Podaj etykiete i opis w formacie JSON:
+Podaj etykietę i opis w formacie JSON:
 {{"label": "...", "description": "..."}}\
 """
 
 REFINEMENT_SYSTEM_PROMPT = """\
-Jestes ekspertem od optymalizacji kategoryzacji tekstu.
-Przegladasz wynik klasteryzacji dokumentow z contact center bankowego.
-Twoim zadaniem jest zaproponowanie ulepszen, takich jak:
+Jesteś ekspertem od optymalizacji kategoryzacji tekstu.
+Przeglądasz wynik klasteryzacji dokumentów z contact center bankowego.
+Twoim zadaniem jest zaproponowanie ulepszeń, takich jak:
 
-1. MERGE (polaczenie) - jezeli dwa lub wiecej klastrow sa bardzo podobne tematycznie
-2. RENAME (zmiana nazwy) - jezeli nazwa jest niejasna lub nieadekwatna
-3. RECLASSIFY (reklasyfikacja) - jezeli jeden lub wiecej klastrow powinno byc podzielonych na mniejsze, bardziej spójne grupy
+1. MERGE (połączenie) - jeżeli dwa lub więcej klastrów są bardzo podobne tematycznie
+2. RENAME (zmiana nazwy) - jeżeli nazwa jest niejasna lub nieadekwatna
+3. RECLASSIFY (reklasyfikacja) - jeżeli jeden lub więcej klastrów powinno być podzielonych na mniejsze, bardziej spójne grupy
 
-Kazdej sugestii przypisz confidence (0.0 do 1.0). Podaj max 5 sugestii.
+Każdej sugestii przypisz confidence (0.0 do 1.0). Podaj max 5 sugestii.
 
-Dodatkowo przeprowadz analize klasteryzacji:
-- Oblicz srednia koherencje wszystkich klastrow
+Dodatkowo przeprowadź analizę klasteryzacji:
+- Oblicz średnią koherencję wszystkich klastrów
 - Zidentyfikuj problematyczne klastry (koherencja < 0.5)
-- Zaproponuj optymalna liczbe klastrow na podstawie analizy
+- Zaproponuj optymalną liczbę klastrów na podstawie analizy
 
-Odpowiedz uzywajac strukturyzowanego formatu zgodnego z modelem Pydantic.\
+Odpowiedz używając strukturyzowanego formatu zgodnego z modelem Pydantic.\
 """
 
 REFINEMENT_USER_PROMPT = """\
-Wynik klasteryzacji ({total_docs} dokumentow, {num_clusters} klastrow):
+Wynik klasteryzacji ({total_docs} dokumentów, {num_clusters} klastrów):
 
 {clusters_description}
 
 Dokumenty nieskategoryzowane (szum): {noise_count}
 
-Srednia koherencja wszystkich klastrow: {avg_coherence:.1%}
+Średnia koherencja wszystkich klastrów: {avg_coherence:.1%}
 Problematyczne klastry (koherencja < 50%): {problematic_clusters}
 
 {focus_section}
 
 {previous_section}
 
-Zaproponuj ulepszenia (max 5 sugestii) oraz przeprowadz analize klasteryzacji.
-Dla kazdej sugestii podaj:
+Zaproponuj ulepszenia (max 5 sugestii) oraz przeprowadź analizę klasteryzacji.
+Dla każdej sugestii podaj:
 - type: "merge" | "rename" | "reclassify"
 - description: opis sugestii po polsku
-- targetClusterIds: lista ID klastrow dotknietych sugestia
-  * dla reclassify: [clusterId1, clusterId2, ...] - lista klastrow do reklasyfikacji (będą podzielone na nowe)
-  * dla merge: [clusterId1, clusterId2, ...] - lista klastrow do polaczenia
+- targetClusterIds: lista ID klastrów dotkniętych sugestią
+  * dla reclassify: [clusterId1, clusterId2, ...] - lista klastrów do reklasyfikacji (będą podzielone na nowe)
+  * dla merge: [clusterId1, clusterId2, ...] - lista klastrów do połączenia
   * dla rename: [clusterId] - pojedynczy klaster do przemianowania
 - suggestedLabel: opcjonalnie nowa nazwa (dla rename/merge)
-- confidence: wartosc od 0.0 do 1.0
+- confidence: wartość od 0.0 do 1.0
 
 W analizie podaj:
-- overallCoherence: srednia koherencja wszystkich klastrow (0.0-1.0)
-- problematicClusters: lista ID klastrow z niska koherencja (< 0.5)
-- suggestedOptimalK: sugerowana optymalna liczba klastrow
-- focusAreasAnalyzed: lista obszarow na ktorych sie skupiles\
+- overallCoherence: średnia koherencja wszystkich klastrów (0.0-1.0)
+- problematicClusters: lista ID klastrów z niską koherencją (< 0.5)
+- suggestedOptimalK: sugerowana optymalna liczba klastrów
+- focusAreasAnalyzed: lista obszarów na których się skupiłeś\
 """
 
 
 class LLMService:
     """
     Serwis LLM oparty o OpenAI API z Instructor.
-    Odpowiada za labelowanie klastrow i generowanie sugestii refinementu.
-    Uzywa structured outputs z modelami Pydantic.
+    Odpowiada za labelowanie klastrów i generowanie sugestii refinementu.
+    Używa structured outputs z modelami Pydantic.
     """
 
     def __init__(self) -> None:
@@ -124,7 +124,7 @@ class LLMService:
     def _ensure_client(self) -> None:
         if self.client is None:
             if not OPENAI_API_KEY:
-                raise RuntimeError("OPENAI_API_KEY nie jest ustawiony. " "Ustaw zmienna srodowiskowa lub dodaj do .env")
+                raise RuntimeError("OPENAI_API_KEY nie jest ustawiony. Ustaw zmienną środowiskową lub dodaj do .env")
             client_kwargs: dict = {"api_key": OPENAI_API_KEY}
             if LLM_BASE_URL:
                 client_kwargs["base_url"] = LLM_BASE_URL
@@ -178,7 +178,7 @@ class LLMService:
         keywords: list[str],
     ) -> dict:
         """
-        Generuje etykiete i opis dla jednego klastra uzywajac Instructor.
+        Generuje etykietę i opis dla jednego klastra używając Instructor.
 
         Returns:
             {"label": "...", "description": "..."}
@@ -206,11 +206,11 @@ class LLMService:
             }
         except Exception as e:
             logger.error(f"LLM labeling failed for cluster {cluster_id}: {e}")
-            # Fallback: uzyj keywords jako nazwy
+            # Fallback: użyj keywords jako nazwy
             fallback_label = ", ".join(keywords[:3]).capitalize() if keywords else f"Klaster {cluster_id}"
             return {
                 "label": fallback_label,
-                "description": f"Automatycznie wykryta kategoria ({doc_count} dokumentow)",
+                "description": f"Automatycznie wykryta kategoria ({doc_count} dokumentów)",
             }
 
     async def label_all_clusters(
@@ -218,10 +218,10 @@ class LLMService:
         topics: list[dict],
     ) -> list[dict]:
         """
-        Rownolegle labeluje wszystkie klastry.
-        Modyfikuje topics in-place dodajac label i description.
+        Równolegle labeluje wszystkie klastry.
+        Modyfikuje topics in-place dodając label i description.
         """
-        logger.info(f"Labelowanie {len(topics)} klastrow przez LLM...")
+        logger.info(f"Labelowanie {len(topics)} klastrów przez LLM...")
         start = time.time()
 
         tasks = [
@@ -241,13 +241,13 @@ class LLMService:
             if isinstance(result, Exception):
                 logger.error(f"Labeling error for cluster {topic['id']}: {result}")
                 topic["label"] = f"Klaster {topic['id']}"
-                topic["description"] = "Blad generowania etykiety"
+                topic["description"] = "Błąd generowania etykiety"
             else:
                 topic["label"] = result["label"]
                 topic["description"] = result["description"]
 
         elapsed = time.time() - start
-        logger.info(f"Labelowanie zakonczone w {elapsed:.1f}s")
+        logger.info(f"Labelowanie zakończone w {elapsed:.1f}s")
         return topics
 
     async def generate_refinement_suggestions(
@@ -259,7 +259,7 @@ class LLMService:
         previous_suggestions: list[dict] | None = None,
     ) -> dict:
         """
-        Generuje sugestie refinementu na podstawie przegladu wszystkich klastrow.
+        Generuje sugestie refinementu na podstawie przeglądu wszystkich klastrów.
 
         Returns:
             {
@@ -271,7 +271,7 @@ class LLMService:
                 }
             }
         """
-        # Zbuduj opis klastrow
+        # Zbuduj opis klastrów
         clusters_lines = []
         coherence_values = []
         problematic = []
@@ -290,8 +290,8 @@ class LLMService:
                 f"Klaster {topic['id']}: \"{topic['label']}\" "
                 f"({topic['documentCount']} dok., koherencja: {int(coherence * 100)}%)\n"
                 f"  Opis: {topic.get('description', 'brak')}\n"
-                f"  Slowa kluczowe: {keywords}\n"
-                f"  Przykladowe teksty:\n  {samples_text}"
+                f"  Słowa kluczowe: {keywords}\n"
+                f"  Przykładowe teksty:\n  {samples_text}"
             )
 
         clusters_description = "\n\n".join(clusters_lines)
@@ -300,13 +300,13 @@ class LLMService:
         focus_section = ""
         if focus_areas:
             focus_map = {
-                "coherence": "spojnosc klastrow (szukaj niespojnych)",
-                "granularity": "poziom szczegolowosci (za duzo/za malo klastrow?)",
-                "naming": "jakosc nazw kategorii",
+                "coherence": "spójność klastrów (szukaj niespójnych)",
+                "granularity": "poziom szczegółowości (za dużo/za mało klastrów?)",
+                "naming": "jakość nazw kategorii",
                 "outliers": "dokumenty nieskategoryzowane i potencjalne reklasyfikacje",
             }
             focus_items = [focus_map.get(f, f) for f in focus_areas]
-            focus_section = f"Skup sie szczegolnie na: {', '.join(focus_items)}"
+            focus_section = f"Skup się szczególnie na: {', '.join(focus_items)}"
 
         # Previous suggestions
         previous_section = ""

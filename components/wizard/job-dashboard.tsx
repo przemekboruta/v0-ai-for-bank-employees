@@ -73,13 +73,13 @@ const STATUS_CONFIG: Record<
     bgClass: "bg-accent/10",
   },
   completed: {
-    label: "Zakonczono",
+    label: "Zakończono",
     color: "text-accent",
     icon: CheckCircle2,
     bgClass: "bg-accent/10",
   },
   failed: {
-    label: "Blad",
+    label: "Błąd",
     color: "text-destructive",
     icon: AlertTriangle,
     bgClass: "bg-destructive/10",
@@ -98,12 +98,12 @@ function timeAgo(dateStr: string): string {
   if (Number.isNaN(then)) return ""
   const diffMs = now - then
   const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return "przed chwila"
+  if (diffMin < 1) return "przed chwilą"
   if (diffMin < 60) return `${diffMin} min temu`
   const diffH = Math.floor(diffMin / 60)
   if (diffH < 24) return `${diffH} godz. temu`
   const diffD = Math.floor(diffH / 24)
-  return `${diffD} dn. temu`
+  return `${diffD} dni temu`
 }
 
 function isMockJob(jobId: string): boolean {
@@ -330,11 +330,11 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
             Twoje analizy
           </h2>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Wyslij nowe zlecenie lub wroc do wczesniejszych przetworzen.
+            Wyślij nowe zlecenie lub wróć do wczesniejszych przetworzeń.
             {isBackendConnected && (
               <span className="ml-2 inline-flex items-center gap-1 text-accent">
                 <Server className="inline h-3 w-3" />
-                Backend polaczony
+                Backend połączony
               </span>
             )}
           </p>
@@ -463,13 +463,13 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                     ) : (
                       <Play className="h-3 w-3" />
                     )}
-                    Wznow
+                    Wznów
                   </Button>
                   <button
                     type="button"
                     className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     onClick={(e) => handleDelete(job.jobId, e)}
-                    aria-label="Usun"
+                    aria-label="Usuń"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -486,7 +486,7 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold text-foreground">
-              Zakonczone ({completedJobs.length})
+              Zakończone ({completedJobs.length})
             </h3>
           </div>
           <ScrollArea className={completedJobs.length > 5 ? "h-[420px]" : ""}>
@@ -521,7 +521,19 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                      {(() => {
+                        const result = job.result as ClusteringResult | undefined
+                        const encoder =
+                          result?.meta?.encoderModel ?? job.config?.encoderModel ?? null
+                        return encoder ? (
+                          <span title="Model encodera" className="font-mono text-foreground/80 truncate max-w-[140px]">
+                            {encoder}
+                          </span>
+                        ) : (
+                          <span title="Encoder domyślny z backendu">Domyślny</span>
+                        )
+                      })()}
                       <span>{job.textCount} dok.</span>
                       <span>{job.config?.algorithm?.toUpperCase() ?? "HDBSCAN"}</span>
                       {job.config?.dimReduction && job.config.dimReduction !== "none" && (
@@ -540,7 +552,7 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                         if (e.key === "Enter")
                           handleDelete(job.jobId, e as unknown as React.MouseEvent)
                       }}
-                      aria-label="Usun"
+                      aria-label="Usuń"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </span>
@@ -576,7 +588,7 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                     {job.name}
                   </span>
                   <p className="text-xs text-destructive/80 truncate">
-                    {job.error ?? "Nieznany blad"}
+                    {job.error ?? "Nieznany błąd"}
                   </p>
                   <span className="text-xs text-muted-foreground">{timeAgo(job.updatedAt)}</span>
                 </div>
@@ -584,7 +596,7 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
                   type="button"
                   onClick={(e) => handleDelete(job.jobId, e)}
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  aria-label="Usun"
+                  aria-label="Usuń"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -601,10 +613,10 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
             <History className="h-7 w-7 text-primary/60" />
           </div>
           <div className="flex flex-col gap-1.5">
-            <p className="text-sm font-medium text-foreground">Brak przetworzen</p>
+            <p className="text-sm font-medium text-foreground">Brak przetworzeń</p>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Rozpocznij nowa analize, aby wykryc tematy w swoich dokumentach. Przetwarzania sa
-              kolejkowane i mozesz do nich wracac w dowolnym momencie.
+              Rozpocznij nową analizę, aby wykryć tematy w swoich dokumentach. Przetwarzania są
+              kolejkowane i możesz do nich wracać w dowolnym momencie.
             </p>
           </div>
           <Button
@@ -612,7 +624,7 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
             className="gap-2 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary"
           >
             <Plus className="h-4 w-4" />
-            Rozpocznij analize
+            Rozpocznij analizę
           </Button>
         </div>
       )}
@@ -627,7 +639,7 @@ export function JobDashboard({ onNewAnalysis, onResumeJob }: JobDashboardProps) 
             className="gap-2 text-xs text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
           >
             <RefreshCw className="h-3 w-3" />
-            Odswiez
+            Odśwież
           </Button>
         </div>
       )}

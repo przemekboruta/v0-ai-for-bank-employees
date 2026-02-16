@@ -1,8 +1,9 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 
 import { cn } from "@/lib/utils"
+import { listEncoders } from "@/lib/api-client"
 import type {
   Granularity,
   ClusteringConfig,
@@ -52,7 +53,7 @@ const GRANULARITY_OPTIONS: {
   {
     value: "low",
     label: "Malo kategorii",
-    description: "Szerokie, ogolne tematy. Najlepsze do przegladu ogolnego.",
+    description: "Szerokie, ogólne tematy. Najlepsze do przeglądu ogólnego.",
     icon: Layers,
     example: "3-5 kategorii",
   },
@@ -77,14 +78,14 @@ const GRANULARITY_OPTIONS: {
 const ALGORITHM_OPTIONS: { value: ClusteringAlgorithm; label: string; description: string }[] = [
   { value: "hdbscan", label: "HDBSCAN", description: "Automatycznie wykrywa liczbe klastrow i szum" },
   { value: "kmeans", label: "K-Means", description: "Wymaga podania liczby klastrow, szybki" },
-  { value: "agglomerative", label: "Aglomeracyjny", description: "Hierarchiczny, dobry dla malych zbiorow" },
+  { value: "agglomerative", label: "Aglomeracyjny", description: "Hierarchiczny, dobry dla małych zbiorów" },
 ]
 
 const DIM_REDUCTION_OPTIONS: { value: DimReductionMethod; label: string; description: string }[] = [
   { value: "umap", label: "UMAP", description: "Najlepsza jakosc, zachowuje strukture lokalna i globalna" },
   { value: "pca", label: "PCA", description: "Szybki, liniowy, dobry do wstepnej redukcji" },
   { value: "tsne", label: "t-SNE", description: "Dobra wizualizacja, wolniejszy" },
-  { value: "none", label: "Brak", description: "Klasteryzacja na pelnych embeddingach" },
+  { value: "none", label: "Brak", description: "Klasteryzacja na pełnych embeddingach" },
 ]
 
 function InfoTooltip({ text }: { text: string }) {
@@ -109,6 +110,11 @@ export function StepConfigure({
   lastJobId,
 }: StepConfigureProps) {
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [encoderModels, setEncoderModels] = useState<string[]>([])
+
+  useEffect(() => {
+    listEncoders().then((res) => setEncoderModels(res.models ?? []))
+  }, [])
 
   const updateConfig = (partial: Partial<ClusteringConfig>) => {
     onConfigChange({ ...config, ...partial })
@@ -123,9 +129,9 @@ export function StepConfigure({
           Konfiguracja klasteryzacji
         </h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Wybierz poziom szczegolowosci i opcjonalnie dostosuj parametry dla Twoich{" "}
+          Wybierz poziom szczegółowości i opcjonalnie dostosuj parametry dla Twoich{" "}
           <span className="font-medium text-foreground">{textCount}</span>{" "}
-          dokumentow.
+          dokumentów.
         </p>
       </div>
 
@@ -193,8 +199,8 @@ export function StepConfigure({
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-0.5">
               <Label className="text-sm font-semibold text-foreground">
-                Uzyj zapisanych embeddingów
-                <InfoTooltip text="Embeddingi z poprzedniego uruchomienia sa zapisane w cache. Ponowne klasteryzowanie z nowymi parametrami bedzie znacznie szybsze." />
+                Użyj zapisanych embeddingów
+                <InfoTooltip text="Embeddingi z poprzedniego uruchomienia są zapisane w cache. Ponowne klasteryzowanie z nowymi parametrami będzie znacznie szybsze." />
               </Label>
               <p className="text-xs text-muted-foreground">
                 Pomiń kosztowny krok generowania embeddingów
@@ -275,8 +281,8 @@ export function StepConfigure({
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium text-foreground">
-                    Liczba klastrow
-                    <InfoTooltip text="Docelowa liczba klastrow. Dla HDBSCAN ta wartosc jest ignorowana." />
+                    Liczba klastrów
+                    <InfoTooltip text="Docelowa liczba klastrów. Dla HDBSCAN ta wartość jest ignorowana." />
                   </Label>
                   <span className="text-sm font-semibold text-primary">
                     {config.numClusters ?? "auto"}
@@ -301,8 +307,8 @@ export function StepConfigure({
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-medium text-foreground">
-                  Min. dokumentow w klastrze
-                  <InfoTooltip text="Minimalna liczba dokumentow potrzebna do utworzenia klastra. Mniejsze wartosci wykrywaja wiecej malych klastrow." />
+                  Min. dokumentów w klastrze
+                  <InfoTooltip text="Minimalna liczba dokumentów potrzebna do utworzenia klastra. Mniejsze wartości wykrywają więcej małych klastrów." />
                 </Label>
                 <span className="text-sm font-semibold text-primary">
                   {config.minClusterSize}
@@ -375,6 +381,59 @@ export function StepConfigure({
                   <span>200</span>
                 </div>
               </div>
+            )}
+
+            {/* Encoder model (only when not using cached embeddings) */}
+            {!config.useCachedEmbeddings && (
+              <>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-foreground">
+                    Model encodera
+                    <InfoTooltip text="Model do generowania embeddingów. Domyślny = ustawiony na backendzie." />
+                  </Label>
+                  <Select
+                    value={config.encoderModel ?? "__default__"}
+                    onValueChange={(v) =>
+                      updateConfig({
+                        encoderModel: v === "__default__" ? null : v,
+                      })
+                    }
+                  >
+                    <SelectTrigger className="w-full border-white/[0.1] bg-white/[0.04] text-foreground">
+                      <SelectValue placeholder="Domyślny (z backendu)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">
+                        <span className="text-muted-foreground">
+                          Domyślny (z backendu)
+                        </span>
+                      </SelectItem>
+                      {encoderModels.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          <span className="font-mono text-xs">{m}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-foreground">
+                    Prefix encodera (opcjonalnie)
+                    <InfoTooltip text="Tekst dodany na początek każdego dokumentu przed embeddowaniem. Spacja po prefiksie jest dodawana automatycznie (np. 'query:' → 'query: Przykładowy tekst')." />
+                  </Label>
+                  <input
+                    type="text"
+                    value={config.encoderPrefix ?? ""}
+                    onChange={(e) =>
+                      updateConfig({
+                        encoderPrefix: e.target.value.trim() || null,
+                      })
+                    }
+                    placeholder="np. query:"
+                    className="rounded-xl border border-white/[0.1] bg-white/[0.04] px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/30 focus:outline-none focus:ring-1 focus:ring-primary/20"
+                  />
+                </div>
+              </>
             )}
           </div>
         </div>

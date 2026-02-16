@@ -46,20 +46,20 @@ const STATUS_LABELS: Record<JobStatus, string> = {
   reducing: "Redukcja wymiarów",
   clustering: "Klasteryzacja",
   labeling: "Analiza LLM -- etykiety i sugestie",
-  completed: "Zakonczono",
-  failed: "Blad",
+  completed: "Zakończono",
+  failed: "Błąd",
   interrupted: "Przerwano",
 }
 
 const STATUS_DETAILS: Record<JobStatus, string> = {
   queued: "Zlecenie oczekuje na przetworzenie...",
   embedding: "Kodowanie tekstów modelem ModernBERT-base...",
-  reducing: "Rzutowanie wektorów do przestrzeni o nizszej wymiarowosci...",
-  clustering: "Wykrywanie naturalnych skupien dokumentów...",
-  labeling: "Generowanie etykiet i sugestii usprawnien...",
-  completed: "Pipeline zakonczony pomyslnie.",
-  failed: "Wystapil blad podczas przetwarzania.",
-  interrupted: "Przetwarzanie zostalo przerwane.",
+  reducing: "Rzutowanie wektorów do przestrzeni o niższej wymiarowości...",
+  clustering: "Wykrywanie naturalnych skupień dokumentów...",
+  labeling: "Generowanie etykiet i sugestii usprawnień...",
+  completed: "Pipeline zakończony pomyślnie.",
+  failed: "Wystąpił błąd podczas przetwarzania.",
+  interrupted: "Przetwarzanie zostało przerwane.",
 }
 
 const STATUS_ICONS: Record<JobStatus, React.ElementType> = {
@@ -228,6 +228,18 @@ export function StepProcessing({
       // Generate result LOCALLY -- no API call at all
       const result = generateMockClustering(texts, config.granularity, 42 + iteration)
       result.jobId = id
+      result.meta = {
+        pipelineDurationMs: totalDuration,
+        encoderModel: config.encoderModel ?? "mock-encoder-v1",
+        algorithm: config.algorithm,
+        dimReduction: config.dimReduction,
+        dimReductionTarget: config.dimReductionTarget,
+        clusteringParams: {},
+        llmModel: "mock-llm",
+        iteration,
+        usedCachedEmbeddings: config.useCachedEmbeddings ?? false,
+        completedAt: new Date().toISOString(),
+      }
 
       setStatus("completed")
       setProgress(100)
@@ -312,7 +324,7 @@ export function StepProcessing({
 
             if (s === "failed") {
               const errMsg =
-                statusData.error || "Nieznany blad po stronie backendu."
+                statusData.error || "Nieznany błąd po stronie backendu."
               setStatus("failed")
               updateJobStore(id, { status: "failed", error: errMsg })
               onError(errMsg)
@@ -326,7 +338,7 @@ export function StepProcessing({
       } catch (e) {
         if (signal.aborted) return
         const msg =
-          e instanceof Error ? e.message : "Blad wysylania zlecenia do backendu."
+          e instanceof Error ? e.message : "Błąd wysyłania zlecenia do backendu."
         setStatus("failed")
         onError(msg)
       }
@@ -356,18 +368,18 @@ export function StepProcessing({
       <div className="flex flex-col items-center gap-2 text-center">
         <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
           {completed
-            ? "Analiza zakonczona"
+            ? "Analiza zakończona"
             : failed
-              ? "Wystapil problem"
-              : "Analizuje Twoje dokumenty"}
+              ? "Wystąpił problem"
+              : "Analizuje Twoje dokumenty…"}
         </h2>
         <p className="text-sm text-muted-foreground">
           {completed
-            ? "Wyniki sa gotowe. Za chwile przejdziesz do przegladu."
+            ? "Wyniki są gotowe. Za chwilę przejdziesz do przeglądu."
             : failed
-              ? "Sprobuj ponownie lub zmien parametry klasteryzacji."
+              ? "Spróbuj ponownie lub zmień parametry klasteryzacji."
               : isBackendMode
-                ? "Zlecenie jest przetwarzane na serwerze. Mozesz wrocic do panelu i kontynuowac pozniej."
+                ? "Zlecenie jest przetwarzane na serwerze. Możesz wrócić do panelu i kontynuować później."
                 : "Trwa symulacja przetwarzania..."}
         </p>
       </div>
@@ -498,7 +510,7 @@ export function StepProcessing({
         <div className="glass flex w-full flex-col items-center gap-4 rounded-2xl border-destructive/20 p-6">
           <AlertTriangle className="h-8 w-8 text-destructive" />
           <p className="text-center text-sm text-destructive">
-            Przetwarzanie nie powiodlo sie. Sprobuj zmienic parametry i uruchom ponownie.
+            Przetwarzanie nie powiodło się. Spróbuj zmienić parametry i uruchom ponownie.
           </p>
         </div>
       )}

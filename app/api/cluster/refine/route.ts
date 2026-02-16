@@ -164,7 +164,7 @@ export async function POST(request: Request) {
       {
         error: {
           code: "LLM_UNAVAILABLE",
-          message: "Nie udalo sie uzyskac sugestii od modelu LLM.",
+          message: "Nie udało się uzyskać sugestii od modelu LLM.",
         },
       },
       { status: 503 }

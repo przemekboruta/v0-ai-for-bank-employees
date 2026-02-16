@@ -2,6 +2,7 @@
 Topic Discovery Hub - Configuration
 """
 
+import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -15,6 +16,33 @@ ENCODER_MODEL_NAME: str = os.getenv("ENCODER_MODEL_NAME", "answerdotai/ModernBER
 ENCODER_BATCH_SIZE: int = int(os.getenv("ENCODER_BATCH_SIZE", "64"))
 ENCODER_MAX_SEQ_LENGTH: int = int(os.getenv("ENCODER_MAX_SEQ_LENGTH", "512"))
 ENCODER_DEVICE: str = os.getenv("ENCODER_DEVICE", "auto")
+
+# Lista modeli do embeddingów; każdy może mieć opcjonalny prefix (do embeddowania trafi prefix + tekst).
+# Format JSON: [{"model": "nazwa/modelu", "prefix": ""}, ...]. Pusty prefix = brak.
+# Domyślnie: jeden model z ENCODER_MODEL_NAME.
+def _parse_encoder_models() -> list[dict]:
+    raw = os.getenv("ENCODER_MODELS", "").strip()
+    if not raw:
+        return [{"model": ENCODER_MODEL_NAME, "prefix": ""}]
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return [{"model": ENCODER_MODEL_NAME, "prefix": ""}]
+        out = []
+        for item in data:
+            if isinstance(item, dict) and "model" in item:
+                out.append({
+                    "model": str(item["model"]).strip(),
+                    "prefix": str(item.get("prefix", "") or ""),
+                })
+            elif isinstance(item, str):
+                out.append({"model": item.strip(), "prefix": ""})
+        return out if out else [{"model": ENCODER_MODEL_NAME, "prefix": ""}]
+    except json.JSONDecodeError:
+        return [{"model": ENCODER_MODEL_NAME, "prefix": ""}]
+
+
+ENCODER_MODELS: list[dict] = _parse_encoder_models()
 
 # === LLM (OpenAI / OpenAI-compatible) ===
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")

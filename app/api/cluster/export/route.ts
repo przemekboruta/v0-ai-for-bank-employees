@@ -109,7 +109,7 @@ export async function POST(request: Request) {
     lines.push("=".repeat(50))
     lines.push("")
     lines.push(`${pl ? "Data" : "Date"}: ${new Date().toLocaleDateString(pl ? "pl-PL" : "en-US")}`)
-    lines.push(`${pl ? "Liczba dokumentow" : "Documents"}: ${result.totalDocuments}`)
+    lines.push(`${pl ? "Liczba dokumentów" : "Documents"}: ${result.totalDocuments}`)
     lines.push(`${pl ? "Wykryte kategorie" : "Topics found"}: ${result.topics.length}`)
     lines.push(`${pl ? "Dokumenty nieskategoryzowane" : "Noise"}: ${result.noise}`)
     lines.push("")

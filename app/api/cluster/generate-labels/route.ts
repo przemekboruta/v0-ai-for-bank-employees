@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       {
         error: {
           code: "LLM_ERROR",
-          message: "Nie udalo sie wygenerowac nazw.",
+          message: "Nie udało się wygenerować nazw.",
         },
       },
       { status: 500 }

@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 
     if (!texts || !Array.isArray(texts) || texts.length < 10) {
       return NextResponse.json(
-        { error: { code: "TOO_FEW_TEXTS", message: `Wymagane minimum 10 tekstow, otrzymano ${texts?.length ?? 0}.` } },
+        { error: { code: "TOO_FEW_TEXTS", message: `Wymagane minimum 10 tekstów, otrzymano ${texts?.length ?? 0}.` } },
         { status: 400 }
       )
     }

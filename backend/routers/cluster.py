@@ -29,7 +29,7 @@ from schemas import (
 from services.pipeline import PipelineService
 from services.job_queue import JobQueueService
 from services.llm import LLMService
-from config import MIN_TEXTS, MAX_TEXTS, MAX_TEXT_LENGTH
+from config import MIN_TEXTS, MAX_TEXTS, MAX_TEXT_LENGTH, ENCODER_MODELS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cluster", tags=["clustering"])
@@ -140,6 +140,21 @@ async def submit_cluster_job(req: ClusterRequest):
                 "message": str(e),
             },
         )
+
+
+# ================================================================
+# GET /cluster/encoders  --  List available encoder models
+# ================================================================
+
+
+@router.get(
+    "/encoders",
+    summary="List available encoder models",
+    description="Returns model names that can be used as encoderModel in job config.",
+)
+async def list_encoders():
+    models = [c["model"] for c in ENCODER_MODELS]
+    return {"models": models}
 
 
 # ================================================================

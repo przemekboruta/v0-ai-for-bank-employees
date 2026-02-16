@@ -74,7 +74,7 @@ export async function POST(request: Request) {
         {
           error: {
             code: "INVALID_INPUT",
-            message: `Klaster ma za malo dokumentow (${clusterDocs.length}) aby podzielic na ${numSubclusters} czesci.`,
+            message: `Klaster ma za mało dokumentów (${clusterDocs.length}), aby podzielić na ${numSubclusters} części.`,
           },
         },
         { status: 400 }
@@ -120,7 +120,7 @@ export async function POST(request: Request) {
       const cx = subDocs.reduce((sum, d) => sum + d.x, 0) / subDocs.length
       const cy = subDocs.reduce((sum, d) => sum + d.y, 0) / subDocs.length
 
-      // Uzyj kolorow z palety
+      // Użyj kolorów z palety
       const usedColorIndices = new Set(
         topics.filter((t) => t.id !== clusterId).map((t) => CLUSTER_COLORS.indexOf(t.color))
       )
@@ -138,7 +138,7 @@ export async function POST(request: Request) {
       return {
         id: newId,
         label: `${targetTopic.label} (podgrupa ${idx + 1})`,
-        description: `Podgrupa ${idx + 1} z oryginalnego klastra "${targetTopic.label}". ${subDocs.length} dokumentow.`,
+        description: `Podgrupa ${idx + 1} z oryginalnego klastra "${targetTopic.label}". ${subDocs.length} dokumentów.`,
         documentCount: subDocs.length,
         sampleTexts: subDocs.slice(0, 3).map((d) => d.text),
         color: CLUSTER_COLORS[colorIdx % CLUSTER_COLORS.length],
