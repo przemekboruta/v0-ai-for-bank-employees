@@ -6,8 +6,7 @@ import { StepIndicator } from "@/components/wizard/step-indicator"
 import { StepUpload } from "@/components/wizard/step-upload"
 import { StepConfigure } from "@/components/wizard/step-configure"
 import { StepProcessing } from "@/components/wizard/step-processing"
-import { StepReview } from "@/components/wizard/step-review"
-import { StepExplore } from "@/components/wizard/step-explore"
+import { StepResults } from "@/components/wizard/step-results"
 import { JobDashboard } from "@/components/wizard/job-dashboard"
 import type {
   WizardStep,
@@ -15,7 +14,7 @@ import type {
   ClusteringResult,
   SavedJob,
 } from "@/lib/clustering-types"
-import { DEFAULT_CLUSTERING_CONFIG } from "@/lib/clustering-types"
+import { DEFAULT_CLUSTERING_CONFIG, ensureNoiseTopic } from "@/lib/clustering-types"
 import { updateJob, getJobStatus } from "@/lib/api-client"
 import { ArrowLeft, ArrowRight, RotateCcw, Sparkles } from "lucide-react"
 
@@ -24,7 +23,6 @@ const STEP_ORDER: WizardStep[] = [
   "upload",
   "configure",
   "processing",
-  "review",
   "explore",
 ]
 
@@ -86,13 +84,13 @@ export default function HomePage() {
       try {
         const statusRes = await getJobStatus(job.jobId)
         if (statusRes.status === "completed" && statusRes.result) {
-          // Use fresh result from backend
-          const freshResult = statusRes.result as ClusteringResult
+          // Use fresh result from backend (ensure noise topic for HDBSCAN)
+          const freshResult = ensureNoiseTopic(statusRes.result as ClusteringResult)
           setClusteringResult(freshResult)
           setLastJobId(job.jobId)
           setConfig(job.config)
           setJobName(job.name)
-          setCurrentStep("review")
+          setCurrentStep("explore")
           // Update localStorage with fresh result
           updateJob(job.jobId, {
             result: freshResult,
@@ -109,7 +107,7 @@ export default function HomePage() {
         setLastJobId(job.jobId)
         setConfig(job.config)
         setJobName(job.name)
-        setCurrentStep("review")
+        setCurrentStep("explore")
       }
     }
   }, [])
@@ -117,9 +115,9 @@ export default function HomePage() {
   // Processing completed
   const handleProcessingComplete = useCallback(
     (result: ClusteringResult, jobId: string) => {
-      setClusteringResult(result)
+      setClusteringResult(ensureNoiseTopic(result))
       setLastJobId(jobId)
-      setCurrentStep("review")
+      setCurrentStep("explore")
     },
     []
   )
@@ -127,7 +125,7 @@ export default function HomePage() {
   // Handle result updates (from merge/split/rename/reclassify operations)
   const handleResultUpdate = useCallback(
     (updatedResult: ClusteringResult) => {
-      setClusteringResult(updatedResult)
+      setClusteringResult(ensureNoiseTopic(updatedResult))
       // Save updated result to localStorage if we have a jobId
       const jobId = updatedResult.jobId || lastJobId
       if (jobId) {
@@ -180,8 +178,7 @@ export default function HomePage() {
 
   const canGoNext =
     (currentStep === "upload" && texts.length > 0) ||
-    currentStep === "configure" ||
-    currentStep === "review"
+    currentStep === "configure"
 
   const showNav = !["processing", "dashboard"].includes(currentStep)
 
@@ -270,15 +267,8 @@ export default function HomePage() {
           />
         )}
 
-        {currentStep === "review" && clusteringResult && (
-          <StepReview
-            result={clusteringResult}
-            onResultUpdate={handleResultUpdate}
-          />
-        )}
-
         {currentStep === "explore" && clusteringResult && (
-          <StepExplore
+          <StepResults
             result={clusteringResult}
             onResultUpdate={handleResultUpdate}
           />
@@ -300,18 +290,16 @@ export default function HomePage() {
                   Panel
                 </Button>
               )}
-              {currentIndex > 1 &&
-                currentStep !== "explore" &&
-                currentStep !== "upload" && (
-                  <Button
-                    variant="ghost"
-                    onClick={goBack}
-                    className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    Wstecz
-                  </Button>
-                )}
+              {currentIndex > 1 && currentStep !== "upload" && currentStep !== "explore" && (
+                <Button
+                  variant="ghost"
+                  onClick={goBack}
+                  className="gap-2 text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Wstecz
+                </Button>
+              )}
               {currentStep === "explore" && (
                 <Button
                   variant="ghost"
@@ -325,7 +313,7 @@ export default function HomePage() {
             </div>
 
             <div className="flex items-center gap-2">
-              {(currentStep === "review" || currentStep === "explore") && (
+              {currentStep === "explore" && (
                 <Button
                   variant="outline"
                   onClick={handleRecluster}

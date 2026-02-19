@@ -144,6 +144,15 @@ class PipelineService:
             granularity = config.get("granularity", "medium")
             num_clusters = config.get("numClusters")
             min_cluster_size = config.get("minClusterSize", 5)
+            # When user set "orientacyjna liczba kategorii" for HDBSCAN, tune min_cluster_size to aim for ~that many clusters + noise
+            hdbscan_target = config.get("hdbscanTargetClusters")
+            if algorithm == "hdbscan" and hdbscan_target is not None and len(texts) > 0:
+                # Smaller min_cluster_size -> more clusters. Heuristic: aim for ~target clusters.
+                from config import GRANULARITY_CONFIG
+                base = GRANULARITY_CONFIG.get(granularity, {}).get("min_cluster_size", 20)
+                inferred = max(3, min(50, len(texts) // max(1, int(hdbscan_target) * 2)))
+                min_cluster_size = min(base, inferred)
+                logger.info(f"HDBSCAN target ~{hdbscan_target} clusters -> min_cluster_size={min_cluster_size}")
             cached_job_id = config.get("cachedJobId")
             use_cached = config.get("useCachedEmbeddings", False) and cached_job_id
             iteration = int(job_info.get("iteration", 0))
@@ -230,6 +239,28 @@ class PipelineService:
                 job_id, status="labeling", progress=80, current_step="LLM generuje etykiety i sugestie..."
             )
             topics = await self.llm.label_all_clusters(topics)
+
+            # Add noise as a full topic when HDBSCAN produced noise (clusterId -1)
+            if noise_count > 0:
+                noise_docs = [d for d in documents if d.get("clusterId") == -1]
+                n = len(noise_docs)
+                cx = sum(d["x"] for d in noise_docs) / n if n else 50.0
+                cy = sum(d["y"] for d in noise_docs) / n if n else 50.0
+                samples = [d["text"][:200] for d in noise_docs[:5]]
+                topics.append({
+                    "id": -1,
+                    "label": "Szum",
+                    "description": "Dokumenty nieskategoryzowane (outliers).",
+                    "documentCount": n,
+                    "sampleTexts": samples,
+                    "color": "hsl(0, 0%, 55%)",
+                    "centroidX": round(cx, 2),
+                    "centroidY": round(cy, 2),
+                    "coherenceScore": 0,
+                    "keywords": [],
+                })
+                topics = sorted(topics, key=lambda t: t["id"])
+
             refinement = await self.llm.generate_refinement_suggestions(
                 topics=topics,
                 total_docs=len(texts),
@@ -428,6 +459,25 @@ class PipelineService:
         # Remove old topics
         remaining_topics = [t for t in topics if t["id"] not in from_set]
 
+        # Compute coherence for all clusters (same as initial pipeline) when we have embeddings
+        coherence_scores: dict[int, float] = {}
+        if job_id:
+            try:
+                all_embeddings = await self.jobs.get_cached_embeddings(job_id)
+                if all_embeddings is not None and len(all_embeddings) > 0:
+                    # Build labels array in job/embedding order (backend uses id "doc-{i}" for i-th doc)
+                    doc_id_to_cluster = {d["id"]: d["clusterId"] for d in documents}
+                    n_emb = len(all_embeddings)
+                    labels_arr = np.array(
+                        [doc_id_to_cluster.get(f"doc-{j}", -1) for j in range(n_emb)],
+                        dtype=np.int64,
+                    )
+                    coherence_scores = await asyncio.to_thread(
+                        self.clustering.compute_coherence, all_embeddings, labels_arr
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to compute coherence after reclassify: {e}")
+
         # Recalculate 2D coordinates if we have embeddings
         if job_id:
             try:
@@ -506,11 +556,12 @@ class PipelineService:
                         else:
                             samples = cluster_texts[:5]
 
+                        coherence = round(coherence_scores.get(new_id, 0.5), 3)
                         # Use LLM to generate label
                         labeled_topic = await self.llm.label_cluster(
                             cluster_id=new_id,
                             doc_count=len(cluster_docs),
-                            coherence=0.7,  # Default coherence for new clusters
+                            coherence=coherence,
                             sample_texts=samples,
                             keywords=keywords,
                         )
@@ -525,7 +576,7 @@ class PipelineService:
                                 "color": CLUSTER_COLORS[new_id % len(CLUSTER_COLORS)],
                                 "centroidX": round(cx, 2),
                                 "centroidY": round(cy, 2),
-                                "coherenceScore": 0.7,  # Default, could be recalculated
+                                "coherenceScore": coherence,
                                 "keywords": keywords,
                             }
                         )
@@ -538,6 +589,7 @@ class PipelineService:
                         continue
                     cx = sum(d["x"] for d in cluster_docs) / len(cluster_docs)
                     cy = sum(d["y"] for d in cluster_docs) / len(cluster_docs)
+                    coh = round(coherence_scores.get(new_id, 0.5), 3)
                     new_topics.append(
                         {
                             "id": new_id,
@@ -548,18 +600,19 @@ class PipelineService:
                             "color": CLUSTER_COLORS[new_id % len(CLUSTER_COLORS)],
                             "centroidX": round(cx, 2),
                             "centroidY": round(cy, 2),
-                            "coherenceScore": 0.7,
+                            "coherenceScore": coh,
                             "keywords": [],
                         }
                     )
         else:
-            # Fallback: create topics without LLM labels
+            # Fallback: create topics without LLM labels (no job_id or no embeddings)
             for i, new_id in enumerate(new_ids):
                 cluster_docs = [d for d in docs_to_reclassify if d.get("clusterId") == new_id]
                 if not cluster_docs:
                     continue
                 cx = sum(d["x"] for d in cluster_docs) / len(cluster_docs)
                 cy = sum(d["y"] for d in cluster_docs) / len(cluster_docs)
+                coh = round(coherence_scores.get(new_id, 0.5), 3)
                 new_topics.append(
                     {
                         "id": new_id,
@@ -570,7 +623,7 @@ class PipelineService:
                         "color": CLUSTER_COLORS[new_id % len(CLUSTER_COLORS)],
                         "centroidX": round(cx, 2),
                         "centroidY": round(cy, 2),
-                        "coherenceScore": 0.7,
+                        "coherenceScore": coh,
                         "keywords": [],
                     }
                 )

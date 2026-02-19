@@ -27,6 +27,21 @@ const WORLD_W = 1000
 const WORLD_H = 700
 const PAD = 80
 
+const MAX_POINTS_DISPLAY = 500
+
+const NOISE_TOPIC: ClusterTopic = {
+  id: -1,
+  label: "Szum",
+  description: "Dokumenty nieskategoryzowane (outliers)",
+  documentCount: 0,
+  sampleTexts: [],
+  color: "hsl(0, 0%, 55%)",
+  centroidX: 0,
+  centroidY: 0,
+  coherenceScore: 0,
+  keywords: [],
+}
+
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 8
 const ZOOM_STEP = 1.25
@@ -91,8 +106,36 @@ export function ClusterScatterPlot({
   const topicMap = useMemo(() => {
     const map = new Map<number, ClusterTopic>()
     for (const t of result.topics) map.set(t.id, t)
+    const hasNoise = result.documents.some((d) => d.clusterId === -1)
+    if (hasNoise) {
+      const noiseCount = result.documents.filter((d) => d.clusterId === -1).length
+      map.set(-1, { ...NOISE_TOPIC, documentCount: noiseCount })
+    }
     return map
-  }, [result.topics])
+  }, [result.topics, result.documents])
+
+  // Limit displayed points to MAX_POINTS_DISPLAY, sampling proportionally from each cluster + noise
+  const displayDocs = useMemo(() => {
+    const docs = result.documents
+    if (docs.length <= MAX_POINTS_DISPLAY) return docs
+    const byCluster = new Map<number, DocumentItem[]>()
+    for (const d of docs) {
+      const id = d.clusterId
+      if (!byCluster.has(id)) byCluster.set(id, [])
+      byCluster.get(id)!.push(d)
+    }
+    const total = docs.length
+    const out: DocumentItem[] = []
+    for (const [, group] of byCluster) {
+      const quota = Math.max(1, Math.round((group.length / total) * MAX_POINTS_DISPLAY))
+      const take = Math.min(group.length, quota)
+      for (let i = 0; i < take; i++) out.push(group[i])
+    }
+    if (out.length > MAX_POINTS_DISPLAY) {
+      return out.slice(0, MAX_POINTS_DISPLAY)
+    }
+    return out
+  }, [result.documents])
 
   // --- Wheel zoom ---
   useEffect(() => {
@@ -284,6 +327,13 @@ export function ClusterScatterPlot({
                 />
               </radialGradient>
             ))}
+            {topicMap.has(-1) && (
+              <radialGradient key="grad--1" id="glow--1">
+                <stop offset="0%" stopColor={NOISE_TOPIC.color} stopOpacity="0.12" />
+                <stop offset="60%" stopColor={NOISE_TOPIC.color} stopOpacity="0.03" />
+                <stop offset="100%" stopColor={NOISE_TOPIC.color} stopOpacity="0" />
+              </radialGradient>
+            )}
             <filter id="blur-glow">
               <feGaussianBlur stdDeviation="3" />
             </filter>
@@ -415,8 +465,8 @@ export function ClusterScatterPlot({
             )
           })}
 
-          {/* Document dots */}
-          {result.documents.map((doc, idx) => {
+          {/* Document dots (max MAX_POINTS_DISPLAY, incl. noise) */}
+          {displayDocs.map((doc, idx) => {
             const topic = topicMap.get(doc.clusterId)
             if (!topic) return null
             const cx = scaleX(doc.x)
@@ -602,7 +652,12 @@ export function ClusterScatterPlot({
         </span>
         <span className="text-[10px] text-muted-foreground/40">|</span>
         <span className="text-[10px] text-muted-foreground/60">
-          {result.documents.length} dokumentów w {result.topics.length} klastrach
+          {result.documents.length} dokumentów
+          {result.documents.length > MAX_POINTS_DISPLAY
+            ? ` (na wykresie max ${MAX_POINTS_DISPLAY})`
+            : ""}{" "}
+          w {result.topics.length} klastrach
+          {topicMap.has(-1) ? " + szum" : ""}
         </span>
       </div>
     </div>

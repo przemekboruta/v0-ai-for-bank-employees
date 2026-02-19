@@ -4,17 +4,16 @@ import React from "react"
 
 import { cn } from "@/lib/utils"
 import type { WizardStep } from "@/lib/clustering-types"
-import { Upload, Settings2, Cpu, MessageSquareText, Map } from "lucide-react"
+import { Upload, Settings2, Cpu, Map } from "lucide-react"
 
 const STEPS: { key: WizardStep; label: string; icon: React.ElementType }[] = [
   { key: "upload", label: "Dane", icon: Upload },
   { key: "configure", label: "Konfiguracja", icon: Settings2 },
   { key: "processing", label: "Analiza", icon: Cpu },
-  { key: "review", label: "Przegląd AI", icon: MessageSquareText },
-  { key: "explore", label: "Eksploracja", icon: Map },
+  { key: "explore", label: "Wyniki", icon: Map },
 ]
 
-const STEP_ORDER: WizardStep[] = ["upload", "configure", "processing", "review", "explore"]
+const STEP_ORDER: WizardStep[] = ["upload", "configure", "processing", "explore"]
 
 function getStepIndex(step: WizardStep) {
   // Dashboard is not part of the indicator; treat it as before upload

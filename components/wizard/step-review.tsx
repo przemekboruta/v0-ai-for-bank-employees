@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { ClusteringResult, LLMSuggestion, ClusterTopic } from "@/lib/clustering-types"
+import { getActiveAndExcludedDocuments, reattachExcludedDocuments } from "@/lib/clustering-types"
 import { refineClusters, renameTopic as renameTopicApi, reclassifyDocuments, mergeClusters } from "@/lib/api-client"
 import {
   Sparkles,
@@ -192,17 +193,19 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     if (selectedClusters.size < 2) return
     setIsExecutingAction(true)
     try {
+      const { activeDocuments, excludedDocuments } = getActiveAndExcludedDocuments(result)
       const jobId = result.jobId || undefined
       const clusterIds = Array.from(selectedClusters)
       const newLabel = mergeLabel.trim() || `Połączony klaster ${clusterIds.join(", ")}`
-      const updatedResult = await mergeClusters(
+      const apiResult = await mergeClusters(
         clusterIds,
         newLabel,
-        result.documents,
+        activeDocuments,
         result.topics,
         jobId
       )
-      if (updatedResult) {
+      if (apiResult) {
+        const updatedResult = reattachExcludedDocuments(apiResult, excludedDocuments)
         onResultUpdate(updatedResult)
         setSelectedClusters(new Set())
         setActionMode(null)
@@ -219,16 +222,18 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     if (selectedClusters.size < 1 || reclassifyNumClusters < 1) return
     setIsExecutingAction(true)
     try {
+      const { activeDocuments, excludedDocuments } = getActiveAndExcludedDocuments(result)
       const jobId = result.jobId || undefined
       const clusterIds = Array.from(selectedClusters)
-      const updatedResult = await reclassifyDocuments(
+      const apiResult = await reclassifyDocuments(
         clusterIds,
         reclassifyNumClusters,
-        result.documents,
+        activeDocuments,
         result.topics,
         jobId
       )
-      if (updatedResult) {
+      if (apiResult) {
+        const updatedResult = reattachExcludedDocuments(apiResult, excludedDocuments)
         onResultUpdate(updatedResult)
         setSelectedClusters(new Set())
         setActionMode(null)
@@ -246,7 +251,11 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     setIsExecutingAction(true)
     try {
       const jobId = result.jobId || undefined
-      const topicIds = Array.from(selectedClusters)
+      const topicIds = Array.from(selectedClusters).filter((id) => id !== -1)
+      if (topicIds.length === 0) {
+        setIsExecutingAction(false)
+        return
+      }
       const response = await fetch("/api/cluster/generate-labels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -284,16 +293,19 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
     try {
       let updatedResult: ClusteringResult | null = null
 
+      const { activeDocuments, excludedDocuments } = getActiveAndExcludedDocuments(result)
+
       // Execute operation via API based on suggestion type
       if (suggestion.type === "merge" && suggestion.targetClusterIds.length >= 2) {
         const newLabel = suggestion.suggestedLabel || `Połączony klaster ${suggestion.targetClusterIds.join(", ")}`
-        updatedResult = await mergeClusters(
+        const apiResult = await mergeClusters(
           suggestion.targetClusterIds,
           newLabel,
-          result.documents,
+          activeDocuments,
           result.topics,
           jobId
         )
+        updatedResult = apiResult ? reattachExcludedDocuments(apiResult, excludedDocuments) : null
       } else if (suggestion.type === "rename" && suggestion.suggestedLabel && suggestion.targetClusterIds.length >= 1) {
         const topicId = suggestion.targetClusterIds[0]
         await renameTopicApi(topicId, suggestion.suggestedLabel, jobId)
@@ -310,19 +322,16 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
           updatedResult = updated
         }
       } else if (suggestion.type === "reclassify" && suggestion.targetClusterIds.length >= 1) {
-        // All IDs are source clusters to reclassify
         const fromClusterIds = suggestion.targetClusterIds
-        // Default to 2 clusters if not specified, or use a reasonable number based on document count
         const numClusters = suggestion.targetClusterIds.length > 1 ? suggestion.targetClusterIds.length : 2
-        
-        // Reclassify all documents from source clusters into new clusters
-        updatedResult = await reclassifyDocuments(
+        const apiResult = await reclassifyDocuments(
           fromClusterIds,
           numClusters,
-          result.documents,
+          activeDocuments,
           result.topics,
           jobId
         )
+        updatedResult = apiResult ? reattachExcludedDocuments(apiResult, excludedDocuments) : null
       }
 
       // Update result with operation result
@@ -437,10 +446,14 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
 
   return (
     <div className="flex flex-col gap-6">
+      <p className="text-sm text-muted-foreground">
+        Łącz klastry, reklasyfikuj dokumenty lub wygeneruj nowe nazwy. Poniżej znajdziesz też
+        sugestie AI i listę kategorii do wyboru.
+      </p>
       {/* Top: Cluster Actions */}
       <div className="glass rounded-2xl border border-white/[0.1] p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-xl font-semibold text-foreground">
+          <h2 className="font-display text-lg font-semibold text-foreground">
             Akcje na klastrach
           </h2>
         </div>
@@ -1043,9 +1056,9 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                     className="h-3 w-3 shrink-0 rounded-full"
                     style={{ backgroundColor: topic.color }}
                   />
-                  <div className="flex flex-1 flex-col gap-0.5">
+                    <div className="flex flex-1 flex-col gap-0.5">
                     <div className="flex items-center justify-between gap-2">
-                      {editingTopicId === topic.id ? (
+                      {editingTopicId === topic.id && topic.id !== -1 ? (
                         <input
                           type="text"
                           value={editingLabel}
@@ -1065,7 +1078,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                         </span>
                       )}
                       <div className="flex items-center gap-1">
-                        {editingTopicId !== topic.id && (
+                        {editingTopicId !== topic.id && topic.id !== -1 && (
                           <button
                             type="button"
                             onClick={(e) => {

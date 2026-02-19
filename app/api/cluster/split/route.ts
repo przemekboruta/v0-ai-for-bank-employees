@@ -89,10 +89,11 @@ export async function POST(request: Request) {
     const sortedByX = [...clusterDocs].sort((a, b) => a.x - b.x)
     const splitPoint = Math.floor(sortedByX.length / numSubclusters)
 
-    // Znajdz najwyzsze id topiku dla nowych id
-    const maxTopicId = Math.max(...topics.map((t) => t.id))
-    const newTopicIds = Array.from({ length: numSubclusters }, (_, i) =>
-      i === 0 ? clusterId : maxTopicId + i
+    // Nowe id dla podklastrow (zawsze nowe, zeby dzialalo tez dla Szumu clusterId -1)
+    const maxTopicId = Math.max(0, ...topics.map((t) => t.id))
+    const newTopicIds = Array.from(
+      { length: numSubclusters },
+      (_, i) => maxTopicId + 1 + i
     )
 
     // Przypisz dokumenty do podklastrow
@@ -152,7 +153,7 @@ export async function POST(request: Request) {
       }
     })
 
-    // Zastap oryginalny topik nowymi
+    // Usun oryginalny topik (w tym Szum -1) i dodaj nowe
     const updatedTopics = [
       ...topics.filter((t) => t.id !== clusterId),
       ...newTopics,

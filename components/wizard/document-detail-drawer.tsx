@@ -4,13 +4,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { DocumentItem, ClusterTopic } from "@/lib/clustering-types"
-import { X, FileText, Tag, MapPin } from "lucide-react"
+import { X, FileText, Tag, MapPin, Ban, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface DocumentDetailDrawerProps {
   document: DocumentItem | null
   topic: ClusterTopic | null
   onClose: () => void
+  onExcludeToggle?: (doc: DocumentItem, excluded: boolean) => void
   allTopics: ClusterTopic[]
 }
 
@@ -18,9 +19,11 @@ export function DocumentDetailDrawer({
   document,
   topic,
   onClose,
+  onExcludeToggle,
   allTopics,
 }: DocumentDetailDrawerProps) {
   if (!document) return null
+  const isExcluded = document.excluded === true
 
   return (
     <>
@@ -143,6 +146,48 @@ export function DocumentDetailDrawer({
                     )
                   })}
                 </div>
+              </div>
+            )}
+
+            {/* Exclude from analysis */}
+            {onExcludeToggle && (
+              <div className="flex flex-col gap-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Udział w analizie
+                </p>
+                <Button
+                  type="button"
+                  variant={isExcluded ? "default" : "outline"}
+                  size="sm"
+                  className={cn(
+                    "gap-2",
+                    isExcluded
+                      ? "border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/25"
+                      : "border-white/[0.1] bg-white/[0.04]"
+                  )}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onExcludeToggle(document, !isExcluded)
+                  }}
+                >
+                  {isExcluded ? (
+                    <>
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Przywróć do analizy
+                    </>
+                  ) : (
+                    <>
+                      <Ban className="h-3.5 w-3.5" />
+                      Wyłącz z analizy (outlier)
+                    </>
+                  )}
+                </Button>
+                {isExcluded && (
+                  <p className="text-xs text-muted-foreground">
+                    Ten dokument nie będzie widoczny na mapie ani w eksporcie. Możesz go przywrócić w dowolnym momencie.
+                  </p>
+                )}
               </div>
             )}
 

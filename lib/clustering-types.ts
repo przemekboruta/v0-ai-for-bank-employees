@@ -5,9 +5,14 @@ export type DimReductionMethod = "umap" | "pca" | "tsne" | "none"
 
 export type JobStatus = "queued" | "embedding" | "reducing" | "clustering" | "labeling" | "completed" | "failed" | "interrupted"
 
+/** Simple category preset: few/medium/many = KMeans with auto numClusters; auto = HDBSCAN; advanced = full controls */
+export type CategoryPreset = "few" | "medium" | "many" | "auto" | "advanced"
+
 /** Advanced clustering configuration */
 export interface ClusteringConfig {
-  /** Granularity preset (simple mode) */
+  /** Simple mode: few/medium/many/auto/advanced. When not "advanced", algorithm and numClusters are derived. */
+  categoryPreset?: CategoryPreset
+  /** Granularity preset (used when categoryPreset is "advanced" or for HDBSCAN hint) */
   granularity: Granularity
   /** Clustering algorithm */
   algorithm: ClusteringAlgorithm
@@ -19,6 +24,8 @@ export interface ClusteringConfig {
   numClusters: number | null
   /** Minimum documents per cluster */
   minClusterSize: number
+  /** Optional target cluster count for HDBSCAN when categoryPreset is "auto" (algorithm aims for ~this + noise) */
+  hdbscanTargetClusters?: number | null
   /** Whether to use cached embeddings from a previous run */
   useCachedEmbeddings: boolean
   /** Previous job ID whose embeddings to reuse */
@@ -30,12 +37,14 @@ export interface ClusteringConfig {
 }
 
 export const DEFAULT_CLUSTERING_CONFIG: ClusteringConfig = {
+  categoryPreset: "auto",
   granularity: "medium",
   algorithm: "hdbscan",
   dimReduction: "umap",
   dimReductionTarget: 50,
   numClusters: null,
   minClusterSize: 5,
+  hdbscanTargetClusters: null,
   useCachedEmbeddings: false,
   cachedJobId: null,
   encoderModel: null,
@@ -61,6 +70,8 @@ export interface DocumentItem {
   clusterId: number
   x: number
   y: number
+  /** When true, document is excluded from display and from re-runs; user can toggle in exploration. */
+  excluded?: boolean
 }
 
 export interface ClusterTopic {
@@ -111,7 +122,68 @@ export interface ClusteringResult {
   meta?: PipelineMeta
 }
 
-export type WizardStep = "dashboard" | "upload" | "configure" | "processing" | "review" | "explore"
+/** Noise topic (id -1) for display when algorithm produced noise but backend did not add the topic. */
+const NOISE_TOPIC_PLACEHOLDER: ClusterTopic = {
+  id: -1,
+  label: "Szum",
+  description: "Dokumenty nieskategoryzowane (outliers).",
+  documentCount: 0,
+  sampleTexts: [],
+  color: "hsl(0, 0%, 55%)",
+  centroidX: 50,
+  centroidY: 50,
+  coherenceScore: 0,
+  keywords: [],
+}
+
+/** Ensures result.topics includes a "Szum" topic (id -1) when result.noise > 0. Use for backward compatibility. */
+export function ensureNoiseTopic(result: ClusteringResult): ClusteringResult {
+  if (result.noise <= 0) return result
+  if (result.topics.some((t) => t.id === -1)) return result
+  const noiseDocs = result.documents.filter((d) => d.clusterId === -1)
+  const n = noiseDocs.length
+  const cx = n ? noiseDocs.reduce((s, d) => s + d.x, 0) / n : 50
+  const cy = n ? noiseDocs.reduce((s, d) => s + d.y, 0) / n : 50
+  const noiseTopic: ClusterTopic = {
+    ...NOISE_TOPIC_PLACEHOLDER,
+    documentCount: n,
+    centroidX: cx,
+    centroidY: cy,
+    sampleTexts: noiseDocs.slice(0, 5).map((d) => d.text.slice(0, 200)),
+  }
+  return {
+    ...result,
+    topics: [...result.topics, noiseTopic].sort((a, b) => a.id - b.id),
+  }
+}
+
+/** Splits result.documents into active (included in analysis) and excluded (outliers). */
+export function getActiveAndExcludedDocuments(result: ClusteringResult): {
+  activeDocuments: DocumentItem[]
+  excludedDocuments: DocumentItem[]
+} {
+  const activeDocuments: DocumentItem[] = []
+  const excludedDocuments: DocumentItem[] = []
+  for (const d of result.documents) {
+    if (d.excluded) excludedDocuments.push(d)
+    else activeDocuments.push(d)
+  }
+  return { activeDocuments, excludedDocuments }
+}
+
+/** After an API call that returns a result built only from active docs, reattach excluded docs so they are not lost. */
+export function reattachExcludedDocuments(
+  apiResult: ClusteringResult,
+  excludedDocuments: DocumentItem[]
+): ClusteringResult {
+  if (excludedDocuments.length === 0) return apiResult
+  return {
+    ...apiResult,
+    documents: [...apiResult.documents, ...excludedDocuments],
+  }
+}
+
+export type WizardStep = "dashboard" | "upload" | "configure" | "processing" | "explore"
 
 /** A saved / in-progress clustering job visible in the dashboard */
 export interface SavedJob {

@@ -9,6 +9,7 @@ import type {
   ClusteringConfig,
   ClusteringAlgorithm,
   DimReductionMethod,
+  CategoryPreset,
 } from "@/lib/clustering-types"
 import {
   Layers,
@@ -18,6 +19,8 @@ import {
   ChevronDown,
   ChevronUp,
   Info,
+  HelpCircle,
+  SlidersHorizontal,
 } from "lucide-react"
 import { Slider } from "@/components/ui/slider"
 import {
@@ -43,35 +46,62 @@ interface StepConfigureProps {
   lastJobId: string | null
 }
 
-const GRANULARITY_OPTIONS: {
-  value: Granularity
+/** Preset: few/medium/many use KMeans with this many clusters. */
+function presetNumClusters(preset: "few" | "medium" | "many", textCount: number): number {
+  const cap = (min: number, max: number) => Math.max(min, Math.min(max, Math.floor(textCount / 10)))
+  switch (preset) {
+    case "few":
+      return Math.max(2, Math.min(5, cap(2, 5)))
+    case "medium":
+      return Math.max(3, Math.min(10, cap(3, 10)))
+    case "many":
+      return Math.max(5, Math.min(15, cap(5, 15)))
+    default:
+      return 7
+  }
+}
+
+const CATEGORY_PRESET_OPTIONS: {
+  value: CategoryPreset
   label: string
   description: string
   icon: React.ElementType
-  example: string
+  detail: string
 }[] = [
   {
-    value: "low",
-    label: "Malo kategorii",
-    description: "Szerokie, ogólne tematy. Najlepsze do przeglądu ogólnego.",
+    value: "few",
+    label: "Mało kategorii",
+    description: "Szerokie, ogólne tematy (K-Means).",
     icon: Layers,
-    example: "3-5 kategorii",
+    detail: "~2–5 kategorii",
   },
   {
     value: "medium",
-    label: "Srednio kategorii",
-    description:
-      "Zrownowazony podzial. Dobre rozroznienie bez nadmiernej szczegolowosci.",
+    label: "Średnio kategorii",
+    description: "Zrównoważony podział (K-Means).",
     icon: LayoutGrid,
-    example: "5-8 kategorii",
+    detail: "~3–10 kategorii",
   },
   {
-    value: "high",
-    label: "Duzo kategorii",
-    description:
-      "Szczegolowy podzial. Wychwytuje niuanse i mniejsze podtematy.",
+    value: "many",
+    label: "Dużo kategorii",
+    description: "Szczegółowy podział (K-Means).",
     icon: Grid3X3,
-    example: "8-12 kategorii",
+    detail: "~5–15 kategorii",
+  },
+  {
+    value: "auto",
+    label: "Nie wiem",
+    description: "Algorytm sam wykryje klastry i szum (HDBSCAN).",
+    icon: HelpCircle,
+    detail: "automatycznie + szum",
+  },
+  {
+    value: "advanced",
+    label: "Zaawansowane",
+    description: "Pełna kontrola: algorytm, liczba klastrów, parametry.",
+    icon: SlidersHorizontal,
+    detail: "własne ustawienia",
   },
 ]
 
@@ -109,37 +139,66 @@ export function StepConfigure({
   textCount,
   lastJobId,
 }: StepConfigureProps) {
-  const [showAdvanced, setShowAdvanced] = useState(false)
   const [encoderModels, setEncoderModels] = useState<string[]>([])
 
   useEffect(() => {
     listEncoders().then((res) => setEncoderModels(res.models ?? []))
   }, [])
 
+  const preset = config.categoryPreset ?? "auto"
   const updateConfig = (partial: Partial<ClusteringConfig>) => {
     onConfigChange({ ...config, ...partial })
   }
 
+  const setPreset = (value: CategoryPreset) => {
+    if (value === "advanced") {
+      updateConfig({ categoryPreset: "advanced" })
+      return
+    }
+    if (value === "auto") {
+      updateConfig({
+        categoryPreset: "auto",
+        algorithm: "hdbscan",
+        numClusters: null,
+        granularity: "medium",
+      })
+      return
+    }
+    if (value === "few" || value === "medium" || value === "many") {
+      const n = presetNumClusters(value, textCount)
+      updateConfig({
+        categoryPreset: value,
+        algorithm: "kmeans",
+        numClusters: n,
+        granularity: value === "few" ? "low" : value === "medium" ? "medium" : "high",
+      })
+    }
+  }
+
+  const effectiveNumClusters =
+    preset === "few" || preset === "medium" || preset === "many"
+      ? presetNumClusters(preset, textCount)
+      : config.numClusters
   const needsNumClusters = config.algorithm === "kmeans" || config.algorithm === "agglomerative"
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
       <div className="flex flex-col gap-2">
         <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-          Konfiguracja klasteryzacji
+          Liczba kategorii
         </h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Wybierz poziom szczegółowości i opcjonalnie dostosuj parametry dla Twoich{" "}
+          Wybierz, jak wiele tematów chcesz wykryć w{" "}
           <span className="font-medium text-foreground">{textCount}</span>{" "}
-          dokumentów.
+          dokumentach.
         </p>
       </div>
 
-      {/* Granularity selection */}
+      {/* Category preset: 5 options */}
       <div className="flex flex-col gap-3">
-        {GRANULARITY_OPTIONS.map((opt) => {
+        {CATEGORY_PRESET_OPTIONS.map((opt) => {
           const Icon = opt.icon
-          const selected = config.granularity === opt.value
+          const selected = preset === opt.value
           return (
             <div
               key={opt.value}
@@ -147,14 +206,14 @@ export function StepConfigure({
                 "glass-interactive flex cursor-pointer items-center gap-4 rounded-2xl p-5",
                 selected && "border-primary/25 bg-primary/[0.06] glow-primary"
               )}
-              onClick={() => updateConfig({ granularity: opt.value })}
+              onClick={() => setPreset(opt.value)}
               role="radio"
               aria-checked={selected}
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault()
-                  updateConfig({ granularity: opt.value })
+                  setPreset(opt.value)
                 }
               }}
             >
@@ -181,7 +240,7 @@ export function StepConfigure({
                         : "bg-white/[0.06] text-muted-foreground"
                     )}
                   >
-                    {opt.example}
+                    {opt.detail}
                   </span>
                 </div>
                 <p className="text-sm leading-relaxed text-muted-foreground">
@@ -192,6 +251,42 @@ export function StepConfigure({
           )
         })}
       </div>
+
+      {/* For "Nie wiem" (auto): explanation + optional target cluster count */}
+      {preset === "auto" && (
+        <div className="glass rounded-2xl border border-primary/15 bg-primary/[0.04] p-5">
+          <p className="mb-3 text-sm leading-relaxed text-foreground/90">
+            <strong>HDBSCAN</strong> sam określa liczbę klastrów i wykrywa <strong>szum</strong> (dokumenty nieskategoryzowane).
+            Nie musisz podawać liczby kategorii — algorytm znajduje naturalne grupy. Możesz opcjonalnie podać orientacyjną liczbę kategorii; wtedy parametry będą dostosowane tak, aby dążyć do takiej liczby + szum.
+          </p>
+          <div className="flex flex-col gap-2">
+            <Label className="text-xs font-medium text-muted-foreground">
+              Orientacyjna liczba kategorii (opcjonalnie)
+            </Label>
+            <input
+              type="number"
+              min={2}
+              max={30}
+              value={config.hdbscanTargetClusters ?? ""}
+              onChange={(e) => {
+                const v = e.target.value.trim()
+                updateConfig({
+                  hdbscanTargetClusters: v === "" ? null : Math.max(2, Math.min(30, parseInt(v, 10) || 2)),
+                })
+              }}
+              placeholder="np. 5 — algorytm będzie dążył do ~5 kategorii + szum"
+              className="rounded-xl border border-white/[0.1] bg-white/[0.04] px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/30 focus:outline-none focus:ring-1 focus:ring-primary/20"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* For few/medium/many: show computed cluster count */}
+      {(preset === "few" || preset === "medium" || preset === "many") && (
+        <p className="text-center text-sm text-muted-foreground">
+          Będzie wykrywanych <span className="font-semibold text-primary">~{effectiveNumClusters} kategorii</span> (K-Means).
+        </p>
+      )}
 
       {/* Cache embeddings toggle */}
       {lastJobId && (
@@ -219,27 +314,8 @@ export function StepConfigure({
         </div>
       )}
 
-      {/* Advanced settings toggle */}
-      <button
-        type="button"
-        className="glass-interactive flex items-center justify-between rounded-2xl px-5 py-4 text-left"
-        onClick={() => setShowAdvanced(!showAdvanced)}
-      >
-        <div className="flex items-center gap-3">
-          <Settings2 className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium text-foreground">
-            Zaawansowane ustawienia
-          </span>
-        </div>
-        {showAdvanced ? (
-          <ChevronUp className="h-4 w-4 text-muted-foreground" />
-        ) : (
-          <ChevronDown className="h-4 w-4 text-muted-foreground" />
-        )}
-      </button>
-
-      {/* Advanced settings panel */}
-      {showAdvanced && (
+      {/* Advanced settings: only when preset is "advanced" */}
+      {preset === "advanced" && (
         <div className="glass rounded-2xl p-6">
           <div className="flex flex-col gap-6">
             {/* Algorithm selection */}

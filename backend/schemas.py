@@ -25,6 +25,7 @@ class ClusteringConfig(BaseModel):
     dim_reduction_target: int = Field(default=50, alias="dimReductionTarget")
     num_clusters: int | None = Field(default=None, alias="numClusters")
     min_cluster_size: int = Field(default=5, alias="minClusterSize")
+    hdbscan_target_clusters: int | None = Field(default=None, alias="hdbscanTargetClusters")
     use_cached_embeddings: bool = Field(default=False, alias="useCachedEmbeddings")
     cached_job_id: str | None = Field(default=None, alias="cachedJobId")
     encoder_model: str | None = Field(default=None, alias="encoderModel")

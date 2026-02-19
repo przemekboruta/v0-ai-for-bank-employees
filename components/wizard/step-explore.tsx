@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -19,7 +19,7 @@ import { ClusterScatterPlot } from "./cluster-scatter-plot"
 import { DocumentDetailDrawer } from "./document-detail-drawer"
 import {
   Download,
-  Map,
+  Map as MapIcon,
   TableIcon,
   BarChart3,
   Search,
@@ -42,8 +42,14 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
   const [editingTopicId, setEditingTopicId] = useState<number | null>(null)
   const [editingLabel, setEditingLabel] = useState("")
 
+  const activeDocuments = useMemo(
+    () => result.documents.filter((d) => !d.excluded),
+    [result.documents]
+  )
+  const excludedCount = result.documents.length - activeDocuments.length
+
   const filteredDocs = useMemo(() => {
-    let docs = result.documents
+    let docs = activeDocuments
     if (selectedTopicId !== null) {
       docs = docs.filter((d) => d.clusterId === selectedTopicId)
     }
@@ -52,7 +58,40 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
       docs = docs.filter((d) => d.text.toLowerCase().includes(q))
     }
     return docs
-  }, [result.documents, selectedTopicId, searchQuery])
+  }, [activeDocuments, selectedTopicId, searchQuery])
+
+  const handleExcludeToggle = useCallback(
+    (doc: DocumentItem, excluded: boolean) => {
+      const docId = doc.id
+      const updated = {
+        ...result,
+        documents: result.documents.map((d) =>
+          d.id === docId ? { ...d, excluded } : d
+        ),
+      }
+      onResultUpdate(updated)
+      if (excluded && selectedDoc?.id === docId) {
+        setSelectedDoc(null)
+      } else if (!excluded && selectedDoc?.id === docId) {
+        const next = updated.documents.find((d) => d.id === docId)
+        if (next) setSelectedDoc(next)
+      }
+    },
+    [result, onResultUpdate, selectedDoc?.id]
+  )
+
+  const resultForDisplay = useMemo(
+    () => ({ ...result, documents: activeDocuments }),
+    [result, activeDocuments]
+  )
+
+  const activeCountByTopic = useMemo(() => {
+    const m = new Map<number, number>()
+    for (const d of activeDocuments) {
+      m.set(d.clusterId, (m.get(d.clusterId) ?? 0) + 1)
+    }
+    return m
+  }, [activeDocuments])
 
   const selectedTopic =
     selectedTopicId !== null
@@ -63,26 +102,16 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     ? result.topics.find((t) => t.id === selectedDoc.clusterId) ?? null
     : null
 
-  const timeAgo = (iso: string) => {
-    const diffMs = Date.now() - new Date(iso).getTime()
-    const diffMin = Math.floor(diffMs / 60_000)
-    const diffH = Math.floor(diffMin / 60)
-    if (diffMin < 1) return "przed chwilą"
-    if (diffMin < 60) return `${diffMin} min temu`
-    if (diffH < 24) return `${diffH} godz. temu`
-    return `${Math.floor(diffH / 24)} dni temu`
-  }
-
   const handleExport = async () => {
     try {
-      const blob = await exportReport(result, "csv", { language: "pl" })
+      const resultToExport = { ...result, documents: activeDocuments }
+      const blob = await exportReport(resultToExport, "csv", { language: "pl" })
       if (blob instanceof Blob) {
         downloadBlob(blob, "klasteryzacja_wyniki.csv")
       }
     } catch {
-      // Fallback: generuj lokalnie
       const header = "tekst,kategoria,id_kategorii,koherencja"
-      const rows = result.documents.map((doc) => {
+      const rows = activeDocuments.map((doc) => {
         const topic = result.topics.find((t) => t.id === doc.clusterId)
         return `"${doc.text.replace(/"/g, '""')}","${topic?.label ?? ""}",${doc.clusterId},${topic?.coherenceScore ? Math.round(topic.coherenceScore * 100) : ""}`
       })
@@ -98,7 +127,10 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     lines.push("================================")
     lines.push("")
     lines.push(`Data: ${new Date().toLocaleDateString("pl-PL")}`)
-    lines.push(`Liczba dokumentów: ${result.totalDocuments}`)
+    lines.push(`Liczba dokumentów (w analizie): ${activeDocuments.length}`)
+    if (excludedCount > 0) {
+      lines.push(`Dokumenty wyłączone z analizy: ${excludedCount}`)
+    }
     lines.push(`Liczba wykrytych kategorii: ${result.topics.length}`)
     lines.push(`Dokumenty nieskategoryzowane (szum): ${result.noise}`)
     lines.push("")
@@ -107,12 +139,14 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
     lines.push("")
 
     const sorted = [...result.topics].sort(
-      (a, b) => b.documentCount - a.documentCount
+      (a, b) => (activeCountByTopic.get(b.id) ?? 0) - (activeCountByTopic.get(a.id) ?? 0)
     )
+    const totalActive = Math.max(1, activeDocuments.length)
     sorted.forEach((topic, idx) => {
-      const pct = ((topic.documentCount / result.totalDocuments) * 100).toFixed(1)
+      const count = activeCountByTopic.get(topic.id) ?? 0
+      const pct = ((count / totalActive) * 100).toFixed(1)
       lines.push(`${idx + 1}. ${topic.label}`)
-      lines.push(`   Dokumentow: ${topic.documentCount} (${pct}%)`)
+      lines.push(`   Dokumentow (w analizie): ${count} (${pct}%)`)
       lines.push(`   Koherencja: ${Math.round(topic.coherenceScore * 100)}%`)
       lines.push(`   Opis: ${topic.description}`)
       lines.push(`   Slowa kluczowe: ${topic.keywords.join(", ")}`)
@@ -168,53 +202,25 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Top bar */}
+      {/* Compact top bar: filters + export */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-            Mapa tematów
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {filteredDocs.length}
-            {filteredDocs.length !== result.totalDocuments &&
-              ` / ${result.totalDocuments}`}{" "}
-            dokumentów w {result.topics.length} kategoriach
-            {selectedTopic && (
-              <span>
-                {" / Filtr: "}
-                <span className="font-medium text-primary">
-                  {selectedTopic.label}
-                </span>
-              </span>
-            )}
-            {searchQuery && (
-              <span>
-                {" / Szukaj: "}
-                <span className="font-medium text-primary">
-                  &quot;{searchQuery}&quot;
-                </span>
-              </span>
-            )}
-          </p>
-          {result.meta && (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              <span title="Model encodera">
-                Encoder: <span className="font-mono text-foreground/80">{result.meta.encoderModel}</span>
-              </span>
-              <span>
-                {result.totalDocuments} dokumentów
-              </span>
-              <span title="Metoda grupowania">
-                Metoda: <span className="text-foreground/80">{result.meta.algorithm.toUpperCase()}</span>
-              </span>
-              {result.meta.completedAt && (
-                <span title={result.meta.completedAt}>
-                  {timeAgo(result.meta.completedAt)}
-                </span>
-              )}
-            </div>
+        <p className="text-sm text-muted-foreground">
+          {selectedTopic && (
+            <span>
+              Kategoria: <span className="font-medium text-primary">{selectedTopic.label}</span>
+              {" · "}
+            </span>
           )}
-        </div>
+          {searchQuery ? (
+            <span>Szukaj: &quot;{searchQuery}&quot;</span>
+          ) : (
+            <span>
+              {filteredDocs.length === activeDocuments.length
+                ? `${activeDocuments.length} dokumentów`
+                : `${filteredDocs.length} z ${activeDocuments.length} dokumentów`}
+            </span>
+          )}
+        </p>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -275,7 +281,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
           )}
         >
           Wszystkie
-          <span className="opacity-60">({result.totalDocuments})</span>
+          <span className="opacity-60">({activeDocuments.length})</span>
         </button>
         {result.topics.map((topic) => (
           <button
@@ -284,8 +290,8 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
             onClick={() =>
               setSelectedTopicId(selectedTopicId === topic.id ? null : topic.id)
             }
-            onDoubleClick={() => startRenaming(topic.id, topic.label)}
-            title="Dwuklik aby zmienic nazwe"
+            onDoubleClick={topic.id !== -1 ? () => startRenaming(topic.id, topic.label) : undefined}
+            title={topic.id === -1 ? "Kategoria Szum (nazwa nie jest zmienialna)" : "Dwuklik aby zmienic nazwe"}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-300",
               selectedTopicId === topic.id
@@ -297,7 +303,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
               className="h-2 w-2 rounded-full"
               style={{ backgroundColor: topic.color }}
             />
-            {editingTopicId === topic.id ? (
+            {editingTopicId === topic.id && topic.id !== -1 ? (
               <input
                 type="text"
                 value={editingLabel}
@@ -325,7 +331,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
             value="map"
             className="gap-1.5 data-[state=active]:bg-white/[0.08] data-[state=active]:text-foreground"
           >
-            <Map className="h-3.5 w-3.5" />
+            <MapIcon className="h-3.5 w-3.5" />
             Mapa
           </TabsTrigger>
           <TabsTrigger
@@ -346,7 +352,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
 
         <TabsContent value="map" className="mt-4">
           <ClusterScatterPlot
-            result={result}
+            result={resultForDisplay}
             selectedTopicId={selectedTopicId}
             onTopicSelect={setSelectedTopicId}
             onDocumentClick={setSelectedDoc}
@@ -469,12 +475,13 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
                   <div className="flex items-end justify-between">
                     <div>
                       <p className="font-display text-3xl font-bold text-foreground">
-                        {topic.documentCount}
+                        {activeCountByTopic.get(topic.id) ?? 0}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         dokumentów (
                         {(
-                          (topic.documentCount / result.totalDocuments) *
+                          ((activeCountByTopic.get(topic.id) ?? 0) /
+                            Math.max(1, activeDocuments.length)) *
                           100
                         ).toFixed(1)}
                         %)
@@ -494,7 +501,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
                     <div
                       className="h-full rounded-full transition-all duration-500"
                       style={{
-                        width: `${(topic.documentCount / result.totalDocuments) * 100}%`,
+                        width: `${((activeCountByTopic.get(topic.id) ?? 0) / Math.max(1, activeDocuments.length)) * 100}%`,
                         backgroundColor: topic.color,
                         boxShadow: `0 0 8px ${topic.color}40`,
                       }}
@@ -523,6 +530,7 @@ export function StepExplore({ result, onResultUpdate }: StepExploreProps) {
         document={selectedDoc}
         topic={selectedDocTopic}
         onClose={() => setSelectedDoc(null)}
+        onExcludeToggle={handleExcludeToggle}
         allTopics={result.topics}
       />
     </div>
