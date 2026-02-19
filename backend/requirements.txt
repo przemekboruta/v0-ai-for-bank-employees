@@ -13,6 +13,7 @@ sentence-transformers>=3.0.0
 umap-learn>=0.5.5
 hdbscan>=0.8.33
 scikit-learn>=1.4.0
+bertopic>=0.17.0
 
 # === Data Processing ===
 numpy>=1.26.0

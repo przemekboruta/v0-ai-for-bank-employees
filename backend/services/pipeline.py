@@ -188,51 +188,48 @@ class PipelineService:
 
             await self.jobs.update_job(job_id, progress=35)
 
-            # === Step 2: Dimensionality reduction (pre-clustering) ===
+            # === Step 2: BERTopic (UMAP + clustering) + 2D for viz ===
             await self.jobs.update_job(
                 job_id,
                 status="reducing",
                 progress=40,
-                current_step=f"Redukcja wymiarów ({dim_reduction.upper()} -> {dim_target}D)...",
+                current_step="Klasteryzacja BERTopic (UMAP + " + algorithm.upper() + ")...",
             )
-            # Run in executor to avoid blocking
-            reduced = await asyncio.to_thread(
-                lambda: self.clustering.reduce_for_clustering(
-                    embeddings, method=dim_reduction, target_dims=dim_target, seed=seed
-                )
-            )
-
-            # Always reduce to 2D for visualization
-            coords_2d = await asyncio.to_thread(lambda: self.clustering.reduce_to_2d(embeddings, seed=seed))
-
-            await self.jobs.update_job(job_id, progress=55)
-
-            # === Step 3: Clustering ===
-            await self.jobs.update_job(
-                job_id, status="clustering", progress=60, current_step=f"Klasteryzacja ({algorithm.upper()})..."
-            )
-            # Run in executor to avoid blocking
-            labels, probabilities = await asyncio.to_thread(
-                lambda: self.clustering.cluster(
-                    reduced,
+            labels, probabilities, topic_model = await asyncio.to_thread(
+                lambda: self.clustering.fit_bertopic(
+                    texts,
+                    embeddings,
                     algorithm=algorithm,
                     granularity=granularity,
                     num_clusters=num_clusters,
                     min_cluster_size=min_cluster_size,
+                    seed=seed,
                 )
             )
             noise_count = int((labels == -1).sum())
 
-            await self.jobs.update_job(job_id, progress=70)
-
-            # === Step 4: Coherence + topics ===
-            await self.jobs.update_job(job_id, progress=75, current_step="Obliczanie koherencji i budowanie topikow...")
-            # Run in executor to avoid blocking
-            coherence_scores = await asyncio.to_thread(lambda: self.clustering.compute_coherence(reduced, labels))
-            topics = await asyncio.to_thread(
-                lambda: self.clustering.build_topics(embeddings, coords_2d, labels, texts, coherence_scores)
+            # Always reduce to 2D for visualization (on original embeddings)
+            coords_2d = await asyncio.to_thread(
+                lambda: self.clustering.reduce_to_2d(embeddings, seed=seed)
             )
-            documents = await asyncio.to_thread(lambda: self.clustering.build_documents(texts, labels, coords_2d))
+
+            await self.jobs.update_job(job_id, progress=60)
+
+            # === Step 3: Coherence + topics (keywords/samples from BERTopic) ===
+            await self.jobs.update_job(
+                job_id, progress=70, current_step="Obliczanie koherencji i budowanie topikow..."
+            )
+            coherence_scores = await asyncio.to_thread(
+                lambda: self.clustering.compute_coherence(embeddings, labels)
+            )
+            topics = await asyncio.to_thread(
+                lambda: self.clustering.build_topics(
+                    embeddings, coords_2d, labels, texts, coherence_scores, topic_model=topic_model
+                )
+            )
+            documents = await asyncio.to_thread(
+                lambda: self.clustering.build_documents(texts, labels, coords_2d)
+            )
 
             # === Step 5: LLM labeling ===
             await self.jobs.update_job(
