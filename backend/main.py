@@ -80,10 +80,14 @@ app.add_middleware(
 from routers.cluster import router as cluster_router
 from routers.export import router as export_router
 from routers.health import router as health_router
+from routers.taxonomy import router as taxonomy_router
+from routers.classification import router as classification_router
 
 app.include_router(cluster_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
+app.include_router(taxonomy_router, prefix="/api")
+app.include_router(classification_router, prefix="/api")
 
 
 @app.get("/", tags=["root"])

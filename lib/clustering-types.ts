@@ -111,7 +111,16 @@ export interface ClusteringResult {
   meta?: PipelineMeta
 }
 
-export type WizardStep = "dashboard" | "upload" | "configure" | "processing" | "review" | "explore"
+export type WizardStep =
+  | "dashboard"
+  | "upload"
+  | "configure"
+  | "processing"
+  | "review"
+  | "explore"
+  | "categories"
+  | "training"
+  | "classification-results"
 
 /** A saved / in-progress clustering job visible in the dashboard */
 export interface SavedJob {
@@ -127,6 +136,111 @@ export interface SavedJob {
   result: ClusteringResult | null
   error?: string
 }
+
+// ===== Classification types =====
+
+export type ClassificationJobStatus =
+  | "queued"
+  | "loading_model"
+  | "training"
+  | "predicting"
+  | "completed"
+  | "failed"
+
+export interface CategoryDefinition {
+  id: string
+  name: string
+  examples: string[]
+  description: string
+}
+
+export interface TaxonomyInfo {
+  taxonomyId: string
+  name: string
+  description: string
+  categories: CategoryDefinition[]
+  categoryCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ClassifiedDocument {
+  id: string
+  text: string
+  categoryId: string
+  categoryName: string
+  confidence: number
+  /** Margin between top-2 predicted probabilities (low = uncertain) */
+  margin?: number
+  /** All class probabilities [catIdx -> prob] */
+  allProbabilities?: number[]
+  /** User-corrected category (set during active learning review) */
+  correctedCategoryId?: string
+  correctedCategoryName?: string
+}
+
+export interface CategoryMetrics {
+  categoryId: string
+  categoryName: string
+  precision: number
+  recall: number
+  f1: number
+  support: number
+}
+
+export interface ClassificationResult {
+  documents: ClassifiedDocument[]
+  categories: CategoryDefinition[]
+  totalDocuments: number
+  modelId: string
+  accuracy: number
+  confidenceAvailable?: boolean
+  categoryMetrics?: CategoryMetrics[]
+  /** Active learning iteration number (0 = initial training) */
+  iteration?: number
+}
+
+export interface TrainingJobInfo {
+  jobId: string
+  status: ClassificationJobStatus
+  progress: number
+  currentStep: string
+  modelId?: string
+  accuracy?: number
+  accuracyType?: "validation" | "training"
+  categoryCount: number
+  createdAt: string
+  updatedAt: string
+  error?: string
+  result?: ClassificationResult
+}
+
+export interface ModelVersionInfo {
+  version: number
+  modelId: string
+  accuracy: number
+  accuracyType: "validation" | "training"
+  categoryMetrics?: CategoryMetrics[]
+  correctionsUsed: number
+  totalExamples: number
+  savedAt: string
+}
+
+export interface ModelInfo {
+  modelId: string
+  name: string
+  backbone: string
+  categoryCount: number
+  categories: string[]
+  accuracy: number
+  savedAt: string
+  /** Version history (newest first) */
+  versions?: ModelVersionInfo[]
+  currentVersion?: number
+}
+
+/** Wizard flow path */
+export type WizardPath = "full" | "classify-only" | "batch"
 
 export const CLUSTER_COLORS = [
   "hsl(210, 100%, 65%)",

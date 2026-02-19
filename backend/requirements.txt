@@ -22,6 +22,10 @@ pandas>=2.2.0
 openai>=1.50.0
 instructor>=1.0.0
 
+# === Classification (SetFit few-shot) ===
+setfit>=1.0.0
+datasets>=2.16.0
+
 # === Utilities ===
 pydantic>=2.6.0
 python-dotenv>=1.0.0

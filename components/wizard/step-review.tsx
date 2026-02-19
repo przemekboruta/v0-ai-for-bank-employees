@@ -24,10 +24,12 @@ import {
   CheckSquare,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { StepHelpBox } from "@/components/wizard/step-help-box"
 
 interface StepReviewProps {
   result: ClusteringResult
   onResultUpdate: (result: ClusteringResult) => void
+  onPromoteToCategoryies?: () => void
 }
 
 function SuggestionIcon({ type }: { type: LLMSuggestion["type"] }) {
@@ -166,7 +168,7 @@ function markConflictingSuggestions(
   })
 }
 
-export function StepReview({ result, onResultUpdate }: StepReviewProps) {
+export function StepReview({ result, onResultUpdate, onPromoteToCategoryies }: StepReviewProps) {
   const [expandedTopic, setExpandedTopic] = useState<number | null>(null)
   const [editingTopicId, setEditingTopicId] = useState<number | null>(null)
   const [editingLabel, setEditingLabel] = useState("")
@@ -177,6 +179,11 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
   const [reclassifyNumClusters, setReclassifyNumClusters] = useState(2)
   const [isExecutingAction, setIsExecutingAction] = useState(false)
   const [suggestionsExpanded, setSuggestionsExpanded] = useState(false)
+  const [showAdvancedActions, setShowAdvancedActions] = useState(false)
+  const [advancedAlgorithm, setAdvancedAlgorithm] = useState("kmeans")
+  const [advancedDimReduction, setAdvancedDimReduction] = useState("umap")
+  const [advancedNumClusters, setAdvancedNumClusters] = useState(2)
+  const [advancedMinClusterSize, setAdvancedMinClusterSize] = useState(5)
 
   const toggleClusterSelection = (clusterId: number) => {
     const newSelected = new Set(selectedClusters)
@@ -435,10 +442,112 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
   const appliedSuggestions = result.llmSuggestions.filter((s) => s.applied)
   const blockedSuggestions = result.llmSuggestions.filter((s) => s.blocked && !s.applied)
 
+  // Compute overview stats
+  const totalDocs = result.documents.length
+  const noiseDocs = result.noise?.length ?? 0
+  const sortedTopics = [...result.topics].sort((a, b) => b.documentCount - a.documentCount)
+  const topTopics = sortedTopics.slice(0, 5)
+
   return (
     <div className="flex flex-col gap-6">
-      {/* Top: Cluster Actions */}
+      {/* Help box */}
+      <StepHelpBox title="Co widze na tym ekranie?">
+        <p>System automatycznie pogrupowol Twoje dokumenty w tematy (klastry). Przejrzyj je i zdecyduj, ktore sa przydatne.</p>
+        <ul className="mt-2 list-disc space-y-1 pl-4">
+          <li>Kliknij na temat, zeby zobaczyc przyklady dokumentow i slowa kluczowe.</li>
+          <li>Jesli wyniki wygladaja dobrze — kliknij <strong>&quot;Eksploruj&quot;</strong> w dolnym pasku, a potem przejdz do kategorii.</li>
+          <li>Jesli chcesz poprawic wyniki — rozwin <strong>&quot;Narzedzia zaawansowane&quot;</strong> ponizej.</li>
+        </ul>
+      </StepHelpBox>
+
+      {/* Quick overview */}
       <div className="glass rounded-2xl border border-white/[0.1] p-6">
+        <h2 className="mb-4 font-display text-xl font-semibold text-foreground">
+          Podsumowanie analizy
+        </h2>
+        <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="rounded-xl bg-white/[0.04] p-3 text-center">
+            <p className="text-2xl font-bold text-primary">{result.topics.length}</p>
+            <p className="text-xs text-muted-foreground">Wykrytych tematow</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.04] p-3 text-center">
+            <p className="text-2xl font-bold text-chart-2">{totalDocs}</p>
+            <p className="text-xs text-muted-foreground">Dokumentow</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.04] p-3 text-center">
+            <p className={cn("text-2xl font-bold", noiseDocs > 0 ? "text-yellow-500" : "text-accent")}>{noiseDocs}</p>
+            <p className="text-xs text-muted-foreground">Niesklasyfikowanych</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.04] p-3 text-center">
+            <p className="text-2xl font-bold text-accent">
+              {result.llmSuggestions.filter(s => !s.applied && !s.blocked).length}
+            </p>
+            <p className="text-xs text-muted-foreground">Sugestii AI</p>
+          </div>
+        </div>
+
+        {/* Top topics preview */}
+        <div className="mb-4">
+          <h3 className="mb-2 text-sm font-semibold text-foreground">Najwieksze tematy:</h3>
+          <div className="flex flex-col gap-2">
+            {topTopics.map((topic) => (
+              <div key={topic.id} className="flex items-center gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
+                <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: topic.color }} />
+                <span className="flex-1 text-sm text-foreground">{topic.label}</span>
+                <span className="text-xs text-muted-foreground">{topic.documentCount} dok.</span>
+                <span className="text-xs text-muted-foreground">{Math.round(topic.coherenceScore * 100)}%</span>
+              </div>
+            ))}
+            {sortedTopics.length > 5 && (
+              <p className="text-center text-xs text-muted-foreground">...i {sortedTopics.length - 5} wiecej</p>
+            )}
+          </div>
+        </div>
+
+        {/* Promote CTA */}
+        {onPromoteToCategoryies && (
+          <div className="rounded-xl border border-accent/20 bg-accent/[0.06] p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Tematy wygladaja dobrze?</p>
+                <p className="text-xs text-muted-foreground">Wybierz te, ktore chcesz zachowac jako kategorie do klasyfikacji.</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={onPromoteToCategoryies}
+                className="shrink-0 gap-1.5 bg-accent/90 text-accent-foreground hover:bg-accent"
+              >
+                <Tag className="h-3.5 w-3.5" />
+                Promuj do kategorii
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Advanced actions — collapsed by default */}
+      <button
+        type="button"
+        className="glass-interactive flex items-center justify-between rounded-2xl px-5 py-4 text-left"
+        onClick={() => setShowAdvancedActions(!showAdvancedActions)}
+      >
+        <div className="flex items-center gap-3">
+          <Layers className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">
+            Narzedzia zaawansowane
+          </span>
+          <Badge variant="secondary" className="border-0 bg-white/[0.06] text-[10px] text-muted-foreground">
+            laczenie, podział, zmiana nazw
+          </Badge>
+        </div>
+        {showAdvancedActions ? (
+          <ChevronUp className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        )}
+      </button>
+
+      {showAdvancedActions && <div className="glass rounded-2xl border border-white/[0.1] p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-display text-xl font-semibold text-foreground">
             Akcje na klastrach
@@ -687,7 +796,8 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                 </label>
                 <select
                   className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  defaultValue="kmeans"
+                  value={advancedAlgorithm}
+                  onChange={(e) => setAdvancedAlgorithm(e.target.value)}
                 >
                   <option value="kmeans">KMeans</option>
                   <option value="hdbscan">HDBSCAN</option>
@@ -696,11 +806,12 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-foreground">
-                  Redukcja wymiarów
+                  Redukcja wymiarow
                 </label>
                 <select
                   className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  defaultValue="umap"
+                  value={advancedDimReduction}
+                  onChange={(e) => setAdvancedDimReduction(e.target.value)}
                 >
                   <option value="umap">UMAP</option>
                   <option value="pca">PCA</option>
@@ -710,13 +821,14 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-foreground">
-                  Liczba klastrów
+                  Liczba klastrow
                 </label>
                 <input
                   type="number"
                   min="1"
                   max="20"
-                  defaultValue={2}
+                  value={advancedNumClusters}
+                  onChange={(e) => setAdvancedNumClusters(parseInt(e.target.value) || 2)}
                   className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
                 />
               </div>
@@ -728,14 +840,38 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
                   type="number"
                   min="1"
                   max="50"
-                  defaultValue={5}
+                  value={advancedMinClusterSize}
+                  onChange={(e) => setAdvancedMinClusterSize(parseInt(e.target.value) || 5)}
                   className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
                 />
               </div>
             </div>
             <Button
               size="sm"
-              onClick={handleExecuteReclassify}
+              onClick={async () => {
+                if (selectedClusters.size < 1) return
+                setIsExecutingAction(true)
+                try {
+                  const jobId = result.jobId || undefined
+                  const clusterIds = Array.from(selectedClusters)
+                  const updatedResult = await reclassifyDocuments(
+                    clusterIds,
+                    advancedNumClusters,
+                    result.documents,
+                    result.topics,
+                    jobId
+                  )
+                  if (updatedResult) {
+                    onResultUpdate(updatedResult)
+                    setSelectedClusters(new Set())
+                    setActionMode(null)
+                  }
+                } catch (error) {
+                  console.error("Failed to reclassify clusters:", error)
+                } finally {
+                  setIsExecutingAction(false)
+                }
+              }}
               disabled={isExecutingAction || selectedClusters.size < 1}
               className="mt-4 w-full gap-1.5 bg-primary/90 text-primary-foreground hover:bg-primary glow-primary disabled:opacity-50"
             >
@@ -753,7 +889,7 @@ export function StepReview({ result, onResultUpdate }: StepReviewProps) {
             </Button>
           </div>
         )}
-      </div>
+      </div>}
 
     <div className="flex flex-col gap-6 lg:flex-row">
       {/* Left: LLM Suggestions */}

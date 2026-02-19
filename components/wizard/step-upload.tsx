@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Upload, FileText, X, Database, Columns, Eye, ChevronDown } from "lucide-react"
 import { generateSampleTexts } from "@/lib/mock-clustering"
 import { cn } from "@/lib/utils"
+import { StepHelpBox } from "@/components/wizard/step-help-box"
 import * as XLSX from "xlsx"
 
 interface StepUploadProps {
@@ -251,10 +252,18 @@ export function StepUpload({ onTextsLoaded, loadedCount }: StepUploadProps) {
           Wgraj dokumenty do analizy
         </h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Wgraj plik CSV lub TXT z tekstami. System automatycznie wykryje
-          kolumny w pliku CSV i pozwoli wybrać kolumnę do analizy.
+          Wgraj plik z tekstami, ktore chcesz przeanalizowac lub sklasyfikowac.
         </p>
       </div>
+
+      <StepHelpBox title="Jak przygotowac dane?">
+        <ul className="list-disc space-y-1 pl-4">
+          <li>Zaladuj plik CSV, XLSX lub TXT z tekstami dokumentow (np. tresc reklamacji, korespondencja).</li>
+          <li>W pliku CSV/XLSX wybierzesz kolumne zawierajaca tekst — kazdy wiersz to jeden dokument.</li>
+          <li>Optymalna liczba dokumentow: <strong>100–5000</strong>. Mniej niz 50 moze dac slabe wyniki clusteringu.</li>
+          <li>Mozesz tez uzyc przykladowych danych bankowych, zeby zobaczyc jak dziala aplikacja.</li>
+        </ul>
+      </StepHelpBox>
 
       {!fileName ? (
         <div

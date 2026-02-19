@@ -7,6 +7,11 @@ import type {
   ClusteringConfig,
   JobInfo,
   SavedJob,
+  CategoryDefinition,
+  TaxonomyInfo,
+  ClassificationResult,
+  TrainingJobInfo,
+  ModelInfo,
 } from "./clustering-types"
 
 /**
@@ -310,6 +315,152 @@ export async function exportReport(
   }
 
   return response.blob()
+}
+
+// ===== Taxonomy =====
+
+export async function createTaxonomy(name: string, description = ""): Promise<TaxonomyInfo> {
+  return apiRequest<TaxonomyInfo>("/api/taxonomy", {
+    method: "POST",
+    body: JSON.stringify({ name, description }),
+  })
+}
+
+export async function listTaxonomies(): Promise<TaxonomyInfo[]> {
+  const data = await apiRequest<{ taxonomies: TaxonomyInfo[] }>("/api/taxonomy", { method: "GET" })
+  return data.taxonomies ?? []
+}
+
+export async function getTaxonomy(taxonomyId: string): Promise<TaxonomyInfo> {
+  return apiRequest<TaxonomyInfo>(`/api/taxonomy/${taxonomyId}`, { method: "GET" })
+}
+
+export async function deleteTaxonomy(taxonomyId: string): Promise<void> {
+  await apiRequest(`/api/taxonomy/${taxonomyId}`, { method: "DELETE" })
+}
+
+export async function addCategory(
+  taxonomyId: string,
+  name: string,
+  examples: string[] = [],
+  description = ""
+): Promise<CategoryDefinition> {
+  return apiRequest<CategoryDefinition>(`/api/taxonomy/${taxonomyId}/category`, {
+    method: "POST",
+    body: JSON.stringify({ name, examples, description }),
+  })
+}
+
+export async function updateCategory(
+  taxonomyId: string,
+  categoryId: string,
+  updates: { name?: string; examples?: string[]; description?: string }
+): Promise<CategoryDefinition> {
+  return apiRequest<CategoryDefinition>(`/api/taxonomy/${taxonomyId}/category/${categoryId}`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  })
+}
+
+export async function deleteCategory(taxonomyId: string, categoryId: string): Promise<void> {
+  await apiRequest(`/api/taxonomy/${taxonomyId}/category/${categoryId}`, { method: "DELETE" })
+}
+
+export async function promoteClusters(
+  taxonomyId: string,
+  clusterIds: number[],
+  clusteringResult: ClusteringResult
+): Promise<{ imported: number; categories: CategoryDefinition[] }> {
+  return apiRequest(`/api/taxonomy/${taxonomyId}/import-clusters`, {
+    method: "POST",
+    body: JSON.stringify({ clusterIds, clusteringResult }),
+  })
+}
+
+export async function importTemplate(
+  taxonomyId: string,
+  templateName: string
+): Promise<{ imported: number; categories: CategoryDefinition[] }> {
+  return apiRequest(`/api/taxonomy/${taxonomyId}/import-template`, {
+    method: "POST",
+    body: JSON.stringify({ templateName }),
+  })
+}
+
+// ===== Classification =====
+
+export async function submitTrainingJob(params: {
+  taxonomyId?: string
+  categories?: CategoryDefinition[]
+  backboneModel?: string
+  numIterations?: number
+  batchSize?: number
+  modelName?: string
+  texts?: string[]
+}): Promise<{ jobId: string; status: string }> {
+  return apiRequest("/api/classify", {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+export async function getTrainingStatus(jobId: string): Promise<TrainingJobInfo> {
+  return apiRequest<TrainingJobInfo>(`/api/classify/job/${jobId}`, { method: "GET" })
+}
+
+export async function predictWithModel(
+  texts: string[],
+  modelId?: string,
+  jobId?: string
+): Promise<ClassificationResult> {
+  return apiRequest<ClassificationResult>("/api/classify/predict", {
+    method: "POST",
+    body: JSON.stringify({ texts, modelId, jobId }),
+  })
+}
+
+export async function batchClassify(
+  texts: string[],
+  modelId: string
+): Promise<ClassificationResult> {
+  return apiRequest<ClassificationResult>("/api/classify/batch", {
+    method: "POST",
+    body: JSON.stringify({ texts, modelId }),
+  })
+}
+
+// ===== Active Learning: Retrain =====
+
+export interface CorrectedDocument {
+  text: string
+  correctedCategoryName: string
+}
+
+export async function submitRetrain(params: {
+  modelId: string
+  corrections: CorrectedDocument[]
+  texts?: string[]
+  numIterations?: number
+}): Promise<{ jobId: string; status: string }> {
+  return apiRequest("/api/classify/retrain", {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+// ===== Models =====
+
+export async function listModels(): Promise<ModelInfo[]> {
+  const data = await apiRequest<{ models: ModelInfo[] }>("/api/models", { method: "GET" })
+  return data.models ?? []
+}
+
+export async function getModelInfo(modelId: string): Promise<ModelInfo> {
+  return apiRequest<ModelInfo>(`/api/models/${modelId}`, { method: "GET" })
+}
+
+export async function deleteModel(modelId: string): Promise<void> {
+  await apiRequest(`/api/models/${modelId}`, { method: "DELETE" })
 }
 
 // ===== Health =====

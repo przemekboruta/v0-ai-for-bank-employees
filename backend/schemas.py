@@ -250,3 +250,165 @@ class GenerateLabelsRequest(BaseModel):
 class GenerateLabelsResponse(BaseModel):
     updated_topics: list[ClusterTopic] = Field(alias="updatedTopics")
     timestamp: str
+
+
+# ===== Classification / Taxonomy =====
+
+
+ClassificationJobStatus = Literal[
+    "queued", "loading_model", "training", "predicting", "completed", "failed"
+]
+
+
+class CategoryDefinition(BaseModel):
+    id: str = ""
+    name: str
+    examples: list[str] = Field(default_factory=list)
+    description: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
+class TaxonomyInfo(BaseModel):
+    taxonomy_id: str = Field(alias="taxonomyId")
+    name: str
+    description: str = ""
+    categories: list[CategoryDefinition] = Field(default_factory=list)
+    category_count: int = Field(default=0, alias="categoryCount")
+    created_at: str = Field(default="", alias="createdAt")
+    updated_at: str = Field(default="", alias="updatedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class TrainRequest(BaseModel):
+    taxonomy_id: str | None = Field(default=None, alias="taxonomyId")
+    categories: list[CategoryDefinition] | None = None
+    backbone_model: str = Field(default="", alias="backboneModel")
+    num_iterations: int = Field(default=20, alias="numIterations")
+    batch_size: int = Field(default=16, alias="batchSize")
+    model_name: str = Field(default="", alias="modelName")
+    texts: list[str] | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class PredictRequest(BaseModel):
+    texts: list[str]
+    model_id: str | None = Field(default=None, alias="modelId")
+    job_id: str | None = Field(default=None, alias="jobId")
+
+    model_config = {"populate_by_name": True}
+
+
+class CorrectedDocument(BaseModel):
+    """A document with user-corrected label for active learning."""
+    text: str
+    corrected_category_name: str = Field(alias="correctedCategoryName")
+
+    model_config = {"populate_by_name": True}
+
+
+class RetrainRequest(BaseModel):
+    """Request to retrain a model with corrections from active learning."""
+    model_id: str = Field(alias="modelId")
+    corrections: list[CorrectedDocument] = Field(default_factory=list)
+    texts: list[str] | None = None
+    num_iterations: int = Field(default=20, alias="numIterations")
+
+    model_config = {"populate_by_name": True}
+
+
+class ClassifiedDocument(BaseModel):
+    id: str
+    text: str
+    category_id: str = Field(alias="categoryId")
+    category_name: str = Field(alias="categoryName")
+    confidence: float
+    margin: float | None = None
+    all_probabilities: list[float] | None = Field(default=None, alias="allProbabilities")
+    corrected_category_id: str | None = Field(default=None, alias="correctedCategoryId")
+    corrected_category_name: str | None = Field(default=None, alias="correctedCategoryName")
+
+    model_config = {"populate_by_name": True}
+
+
+class CategoryMetrics(BaseModel):
+    category_id: str = Field(alias="categoryId")
+    category_name: str = Field(alias="categoryName")
+    precision: float = 0.0
+    recall: float = 0.0
+    f1: float = 0.0
+    support: int = 0
+
+    model_config = {"populate_by_name": True}
+
+
+class ClassificationResult(BaseModel):
+    documents: list[ClassifiedDocument]
+    categories: list[CategoryDefinition]
+    total_documents: int = Field(alias="totalDocuments")
+    model_id: str = Field(default="", alias="modelId")
+    accuracy: float = 0.0
+    confidence_available: bool = Field(default=True, alias="confidenceAvailable")
+    category_metrics: list[CategoryMetrics] | None = Field(default=None, alias="categoryMetrics")
+    iteration: int = 0
+
+    model_config = {"populate_by_name": True}
+
+
+class TrainingJobInfo(BaseModel):
+    job_id: str = Field(alias="jobId")
+    status: ClassificationJobStatus
+    progress: float = 0.0
+    current_step: str = Field(default="", alias="currentStep")
+    model_id: str | None = Field(default=None, alias="modelId")
+    accuracy: float | None = None
+    accuracy_type: str | None = Field(default=None, alias="accuracyType")
+    category_count: int = Field(default=0, alias="categoryCount")
+    created_at: str = Field(default="", alias="createdAt")
+    updated_at: str = Field(default="", alias="updatedAt")
+    error: str | None = None
+    result: ClassificationResult | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class ModelVersionInfo(BaseModel):
+    version: int
+    model_id: str = Field(alias="modelId")
+    accuracy: float = 0.0
+    accuracy_type: str = Field(default="training", alias="accuracyType")
+    category_metrics: list[CategoryMetrics] | None = Field(default=None, alias="categoryMetrics")
+    corrections_used: int = Field(default=0, alias="correctionsUsed")
+    total_examples: int = Field(default=0, alias="totalExamples")
+    saved_at: str = Field(default="", alias="savedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class ModelInfo(BaseModel):
+    model_id: str = Field(alias="modelId")
+    name: str
+    backbone: str = ""
+    category_count: int = Field(default=0, alias="categoryCount")
+    categories: list[str] = Field(default_factory=list)
+    accuracy: float = 0.0
+    saved_at: str = Field(default="", alias="savedAt")
+    versions: list[ModelVersionInfo] = Field(default_factory=list)
+    current_version: int = Field(default=1, alias="currentVersion")
+
+    model_config = {"populate_by_name": True}
+
+
+class PromoteClustersRequest(BaseModel):
+    cluster_ids: list[int] = Field(alias="clusterIds")
+    clustering_result: ClusteringResult = Field(alias="clusteringResult")
+
+    model_config = {"populate_by_name": True}
+
+
+class ImportTemplateRequest(BaseModel):
+    template_name: str = Field(alias="templateName")
+
+    model_config = {"populate_by_name": True}

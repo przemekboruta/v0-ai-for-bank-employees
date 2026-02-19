@@ -76,3 +76,4 @@ npm-debug.log*
 # test_sentences.json
 
 backend/saved_models/
+checkpoints/

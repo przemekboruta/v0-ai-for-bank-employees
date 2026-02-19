@@ -1,0 +1,94 @@
+{
+  "name": "Reklamacje bankowe",
+  "description": "Szablon kategorii typowych reklamacji bankowych",
+  "categories": [
+    {
+      "name": "Karty platnicze",
+      "description": "Reklamacje dotyczace kart debetowych i kredytowych",
+      "examples": [
+        "Moja karta zostala zablokowana bez powodu",
+        "Nie moge placic karta w internecie",
+        "Karta nie dziala w bankomacie",
+        "Podwojne obciazenie za transakcje karta",
+        "Nie otrzymalem nowej karty po wygasnieciu starej"
+      ]
+    },
+    {
+      "name": "Przelewy i platnosci",
+      "description": "Problemy z przelewami krajowymi i zagranicznymi",
+      "examples": [
+        "Przelew nie doszedl do odbiorcy",
+        "Podwojnie pobrano przelew",
+        "Przelew zagraniczny trwa zbyt dlugo",
+        "Blad przy realizacji przelewu natychmiastowego",
+        "Nie moge wykonac przelewu na podany numer konta"
+      ]
+    },
+    {
+      "name": "Kredyty i pozyczki",
+      "description": "Reklamacje dotyczace kredytow hipotecznych, gotowkowych i pozyczek",
+      "examples": [
+        "Bledne naliczenie odsetek od kredytu",
+        "Nie zgadzam sie z harmonogramem splat",
+        "Problem z wczesniejsza splata kredytu",
+        "Odmowa udzielenia kredytu bez uzasadnienia",
+        "Zmiana oprocentowania bez powiadomienia"
+      ]
+    },
+    {
+      "name": "Logowanie i bezpieczenstwo",
+      "description": "Problemy z dostepem do konta, logowaniem, bezpieczenstwem",
+      "examples": [
+        "Nie moge zalogowac sie do bankowosci internetowej",
+        "Aplikacja mobilna nie dziala",
+        "Ktos wlamal sie na moje konto",
+        "Podejrzana transakcja na moim koncie",
+        "Nie moge zresetowac hasla"
+      ]
+    },
+    {
+      "name": "Oplaty i prowizje",
+      "description": "Reklamacje dotyczace naliczonych oplat i prowizji",
+      "examples": [
+        "Naliczono oplate za konto mimo spelnienia warunkow",
+        "Zbyt wysoka prowizja za przelew",
+        "Oplata za wydanie zaswiadczenia jest za wysoka",
+        "Nie zgadzam sie z oplata za przewalutowanie",
+        "Pobrano oplate za usluge ktorej nie zamawialam"
+      ]
+    },
+    {
+      "name": "Obsluga klienta",
+      "description": "Skargi na jakosc obslugi w oddzialach i na infolinii",
+      "examples": [
+        "Dlugi czas oczekiwania na infolinii",
+        "Nieprofesjonalna obsluga w oddziale",
+        "Konsultant udzielil blednych informacji",
+        "Brak odpowiedzi na moja reklamacje od 30 dni",
+        "Pracownik oddzialu odmowil przyjecia reklamacji"
+      ]
+    },
+    {
+      "name": "Bankomaty i wplatomaty",
+      "description": "Problemy z bankomatami i wplatomatami",
+      "examples": [
+        "Bankomat nie wydal pieniedzy ale obciazyl konto",
+        "Bankomat zatrzynal moja karte",
+        "Wplatomat nie zaksiegowal wplaty",
+        "Bankomat wydal uszkodzony banknot",
+        "Nie moge wyplacic gotowki z bankomatu partnera"
+      ]
+    },
+    {
+      "name": "Inne",
+      "description": "Pozostale reklamacje niekwalifikujace sie do powyzszych kategorii",
+      "examples": [
+        "Problem z ubezpieczeniem dolaczonym do konta",
+        "Pytanie o program lojalnosciowy",
+        "Reklamacja dotyczaca uslugi maklerskiej",
+        "Problem z dostepem do historii rachunku",
+        "Zmiana danych osobowych nie zostala zaktualizowana"
+      ]
+    }
+  ]
+}

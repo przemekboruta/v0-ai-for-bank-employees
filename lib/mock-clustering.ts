@@ -22,6 +22,11 @@ const BANKING_TOPICS: Record<
       "Platnosc zblizeniowa nie przeszla mimo wystarczajacych srodkow na koncie.",
       "Prosze o reklamacje podwojnie naliczonej transakcji w sklepie internetowym.",
       "Karta nie dziala za granica pomimo wczesniejszego zgloszenia wyjazdu.",
+      "W bankomacie zjelo mi karte i nie wiem, jak ja odzyskac.",
+      "Dostalem nowa karte, ale nie moge jej aktywowac przez telefon.",
+      "Na wyciagu widze platnosc w restauracji w Krakowie, a bylem wtedy w Warszawie.",
+      "Prosze o natychmiastowe zablokowanie karty - prawdopodobnie ja zgubilem.",
+      "Czy moge zlozyc reklamacje transakcji sprzed pol roku?",
     ],
   },
   credit: {
@@ -31,10 +36,15 @@ const BANKING_TOPICS: Record<
     keywords: ["kredyt", "rata", "oprocentowanie", "hipoteczny", "gotowkowy"],
     samples: [
       "Chcialabym dowiedziec sie o aktualne oprocentowanie kredytu hipotecznego.",
-      "Czy mogę zmienić dzien splaty raty kredytowej z 15 na 1 kazdego miesiaca?",
+      "Czy moge zmienic dzien splaty raty kredytowej z 15 na 1 kazdego miesiaca?",
       "Jakie dokumenty sa potrzebne do zlozenia wniosku o kredyt gotowkowy?",
       "Prosze o informacje o mozliwosci wczesniejszej splaty kredytu bez dodatkowych oplat.",
       "Czy moge zwiekszyc kwote kredytu odnawialnego?",
+      "Ile wynosi minimalna wklad wlasny przy kredycie hipotecznym na pierwsze mieszkanie?",
+      "Czy bank uwzglednia premie miesieczna przy wyliczaniu zdolnosci kredytowej?",
+      "Chce wziac kredyt na samochod - jakie sa aktualne promocje?",
+      "Czy po smierci wspolpozyczkobiorcy kredyt przechodzi na spadkobiercow?",
+      "Prosze o harmonogram splat - zgubilem ostatni list z banku.",
     ],
   },
   account_opening: {
@@ -48,6 +58,11 @@ const BANKING_TOPICS: Record<
       "Jakie konto oszczednosciowe polecacie z najlepszym oprocentowaniem?",
       "Chcialabym otworzyc konto walutowe w EUR. Jakie sa oplaty?",
       "Czy do otwarcia konta potrzebuje meldunku?",
+      "Potrzebuje konta dla fundacji - jaka oferta jest dostepna?",
+      "Czy moge miec dwa konta osobiste w jednym banku?",
+      "Jak dlugo trwa weryfikacja tozsamosci przy otwarciu konta zdalnie?",
+      "Szukam konta z darmowymi przelewami do zagranicy w strefie euro.",
+      "Czy konto dla mlodych do 26 lat ma inne limity przelewow?",
     ],
   },
   transfer_issues: {
@@ -57,10 +72,15 @@ const BANKING_TOPICS: Record<
     keywords: ["przelew", "opoznienie", "SWIFT", "BLIK", "elixir"],
     samples: [
       "Przelew wewnetrzny nie dotarl do odbiorcy mimo uplywu 3 dni roboczych.",
-      "Przelew SWIFT do USA zostal zwrocony. Prosze o wyjaśnienie powodu.",
+      "Przelew SWIFT do USA zostal zwrocony. Prosze o wyjasnienie powodu.",
       "BLIK nie dziala - nie moge wyslac pieniedzy do znajomego.",
       "Zrobilem przelew na bledny numer konta. Czy mozna go cofnac?",
       "Przelew natychmiastowy nie zostal zaksiegowany mimo potwierdzenia.",
+      "Odbiorca mowi, ze nie dostal przelewu, a u mnie jest juz obciazenie.",
+      "Czy moge ustawic przelew cykliczny na inna date niz 1. dnia miesiaca?",
+      "Przelew zagraniczny w CHF - dlaczego pobrano wyzsza prowizje niz w taryfie?",
+      "Chce anulowac zlecenie stalego - nie widze takiej opcji w aplikacji.",
+      "Czy Elixir dziala w soboty? Przelew z piatku nadal nie doszedl.",
     ],
   },
   mobile_app: {
@@ -74,6 +94,11 @@ const BANKING_TOPICS: Record<
       "Aplikacja zamyka sie sama przy probie wykonania przelewu.",
       "Jak wlaczyc powiadomienia push o transakcjach w nowej wersji aplikacji?",
       "Biometria na telefonie przestala dzialac po zmianie telefonu.",
+      "Skanowanie dowodu przy weryfikacji nie dziala - aparat sie wylacza.",
+      "Czy aplikacja dziala na Androidzie 14? Mam crashe przy otwieraniu.",
+      "Nie otrzymuje kodu SMS do potwierdzenia - numer jest aktualny.",
+      "Wylogowalo mnie po kilku minutach bez powodu. Czy to ustawienie?",
+      "Chce wylaczyc logowanie odciskiem, zostawic tylko PIN.",
     ],
   },
   insurance: {
@@ -93,6 +118,11 @@ const BANKING_TOPICS: Record<
       "Prosze o informacje o ubezpieczeniu na wypadek utraty pracy.",
       "Jak zlozyc roszczenie z ubezpieczenia od utraty karty?",
       "Czy ubezpieczenie kredytu hipotecznego jest obowiazkowe?",
+      "Uleglem wypadkowi - od kogo dostane formularz do ubezpieczenia NNW?",
+      "Czy polisa na samochod z kredytu obejmuje zielona karte za granica?",
+      "Chce przedluzyc ubezpieczenie na telefon - gdzie to zrobic w aplikacji?",
+      "Odszkodowanie z AC nie zostalo jeszcze przelane po miesiacu od szkody.",
+      "Czy moge przeniesc ubezpieczenie na zycie do innego banku?",
     ],
   },
   fees: {
@@ -106,6 +136,11 @@ const BANKING_TOPICS: Record<
       "Prosze o zwrot oplaty za wydanie duplikatu karty - nie zostalam poinformowana o koszcie.",
       "Reklamuje naliczenie oplaty za przelew natychmiastowy - mialem pakiet darmowych.",
       "Zmieniliscie taryfe bez powiadomienia mnie z 30-dniowym wyprzedzeniem.",
+      "Pobrano mi oplate za przelew wewnatrz Unii - czy to blad?",
+      "Czy jest mozliwosc zwolnienia z oplat za konto dla seniora 70+?",
+      "Dlaczego za wyplate w kantorze w Egipcie pobrano 5% prowizji?",
+      "Prosze o wyjasnienie - na wyciagu widze oplate za 'udostepnienie danych'.",
+      "Nie zgodzilem sie na pakiet premium, a naliczacie mi miesieczna oplate.",
     ],
   },
   online_banking: {
@@ -119,6 +154,11 @@ const BANKING_TOPICS: Record<
       "Nie moge autoryzowac przelewu - SMS z kodem nie przychodzi.",
       "Jak dodac nowego beneficjenta do listy zaufanych odbiorcow online?",
       "System bankowosci online nie laduje sie na przegladarce Safari.",
+      "Czy moge uzywac bankowosci w pracy przez siec firmowa?",
+      "Kod z tokena programowego nie jest akceptowany przy logowaniu.",
+      "Chce wylaczyc autoryzacje SMS i przejsc tylko na aplikacje.",
+      "Po zmianie numeru telefonu nie moge sie zalogowac - blokada bezpieczenstwa.",
+      "Czy haslo do bankowosci moze byc takie samo jak do skrzynki email?",
     ],
   },
 }
@@ -272,10 +312,8 @@ export function generateMockClustering(
 export function generateSampleTexts(): string[] {
   const allSamples: string[] = []
   for (const topic of Object.values(BANKING_TOPICS)) {
-    for (let i = 0; i < 3; i++) {
-      for (const sample of topic.samples) {
-        allSamples.push(i === 0 ? sample : `${sample} (wariant ${i + 1})`)
-      }
+    for (const sample of topic.samples) {
+      allSamples.push(sample)
     }
   }
   return allSamples

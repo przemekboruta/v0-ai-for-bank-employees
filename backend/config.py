@@ -90,6 +90,13 @@ MAX_TEXT_LENGTH: int = int(os.getenv("MAX_TEXT_LENGTH", "5000"))
 PIPELINE_TIMEOUT_SECONDS: int = int(os.getenv("PIPELINE_TIMEOUT_SECONDS", "600"))
 MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "3"))
 
+# === SetFit Classification ===
+SETFIT_NUM_ITERATIONS: int = int(os.getenv("SETFIT_NUM_ITERATIONS", "20"))
+SETFIT_BATCH_SIZE: int = int(os.getenv("SETFIT_BATCH_SIZE", "16"))
+MODELS_DIR: Path = Path(os.getenv("MODELS_DIR", str(Path(__file__).parent / "saved_models")))
+TAXONOMY_TTL: int = int(os.getenv("TAXONOMY_TTL", str(30 * 24 * 3600)))  # 30 days
+LOCAL_ENCODER_PATH: str = os.getenv("LOCAL_ENCODER_PATH", "")  # path to custom fine-tuned encoder
+
 # === Serwer ===
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8000"))

@@ -1,0 +1,50 @@
+{
+  "name": "Typy zgloszen",
+  "description": "Podstawowa klasyfikacja typow zgloszen klientow banku",
+  "categories": [
+    {
+      "name": "Reklamacja",
+      "description": "Formalne zastrzezenie dotyczace uslugi lub produktu bankowego",
+      "examples": [
+        "Skladam reklamacje na bledne naliczenie oplat",
+        "Chce zlozyc reklamacje - podwojnie pobrano mi przelew",
+        "Reklamacja dotyczaca nieautoryzowanej transakcji na karcie",
+        "Zglaszam reklamacje na brak realizacji dyspozycji",
+        "Reklamacja - bankomat nie wydal pieniedzy"
+      ]
+    },
+    {
+      "name": "Skarga",
+      "description": "Wyrazenie niezadowolenia z jakosci obslugi lub dzialania banku",
+      "examples": [
+        "Chce zlozyc skarge na pracownika oddzialu",
+        "Skarga na dlugi czas oczekiwania na infolinii",
+        "Jestem niezadowolony z obslugi - konsultant byl nieuprzejmy",
+        "Skarga na brak mozliwosci kontaktu z doradca",
+        "Skladam skarge na wielokrotne przekierowania podczas rozmowy"
+      ]
+    },
+    {
+      "name": "Zapytanie",
+      "description": "Prosby o informacje dotyczace produktow lub uslug bankowych",
+      "examples": [
+        "Chcialbym uzyskac informacje o ofercie kredytowej",
+        "Jakie sa warunki otwarcia konta oszczednosciowego?",
+        "Ile wynosi aktualne oprocentowanie lokaty?",
+        "Prosze o informacje o limicie transakcji",
+        "Gdzie znajde regulamin korzystania z karty?"
+      ]
+    },
+    {
+      "name": "Dyspozycja",
+      "description": "Zlecenie wykonania operacji lub zmiany w usludze bankowej",
+      "examples": [
+        "Prosze o zablokowanie mojej karty",
+        "Chce zmienic limit transakcji na karcie",
+        "Prosze o zamkniecie rachunku oszczednosciowego",
+        "Zlecam zmiane adresu korespondencyjnego",
+        "Prosze o wygenerowanie nowego hasla"
+      ]
+    }
+  ]
+}

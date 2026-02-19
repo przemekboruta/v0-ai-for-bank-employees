@@ -35,6 +35,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { StepHelpBox } from "@/components/wizard/step-help-box"
 
 interface StepConfigureProps {
   config: ClusteringConfig
@@ -126,14 +127,23 @@ export function StepConfigure({
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
       <div className="flex flex-col gap-2">
         <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-          Konfiguracja klasteryzacji
+          Jak szczegolowo grupowac?
         </h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Wybierz poziom szczegółowości i opcjonalnie dostosuj parametry dla Twoich{" "}
+          Wybierz poziom szczegolowosci dla Twoich{" "}
           <span className="font-medium text-foreground">{textCount}</span>{" "}
-          dokumentów.
+          dokumentow. Mozesz zawsze wrocic i zmienic ustawienia.
         </p>
       </div>
+
+      <StepHelpBox title="Ktory poziom wybrac?">
+        <ul className="list-disc space-y-1 pl-4">
+          <li><strong>Malo kategorii</strong> — dobrze na poczatek, zeby zobaczyc ogolny obraz. Wystarczy gdy masz kilka glownych typow spraw.</li>
+          <li><strong>Srednio</strong> — najczesciej najlepszy wybor. Laczy ogolnosc z przydatnymi szczegolami.</li>
+          <li><strong>Duzo kategorii</strong> — gdy podejrzewasz, ze w danych kryja sie rzadkie, ale wazne tematy (np. nietypowe reklamacje).</li>
+        </ul>
+        <p className="mt-2">Jesli wyniki nie beda satysfakcjonujace, zawsze mozesz wrocic i zmienic ustawienia — embeddingi beda juz w cache, wiec reklasteryzacja bedzie szybka.</p>
+      </StepHelpBox>
 
       {/* Granularity selection */}
       <div className="flex flex-col gap-3">

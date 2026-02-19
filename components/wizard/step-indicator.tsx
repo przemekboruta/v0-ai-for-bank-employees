@@ -3,38 +3,82 @@
 import React from "react"
 
 import { cn } from "@/lib/utils"
-import type { WizardStep } from "@/lib/clustering-types"
-import { Upload, Settings2, Cpu, MessageSquareText, Map } from "lucide-react"
+import type { WizardStep, WizardPath } from "@/lib/clustering-types"
+import {
+  Upload,
+  Settings2,
+  Cpu,
+  MessageSquareText,
+  Map,
+  FolderOpen,
+  Brain,
+  BarChart3,
+} from "lucide-react"
 
-const STEPS: { key: WizardStep; label: string; icon: React.ElementType }[] = [
+interface StepDef {
+  key: WizardStep
+  label: string
+  icon: React.ElementType
+}
+
+const DISCOVERY_STEPS: StepDef[] = [
   { key: "upload", label: "Dane", icon: Upload },
   { key: "configure", label: "Konfiguracja", icon: Settings2 },
   { key: "processing", label: "Analiza", icon: Cpu },
-  { key: "review", label: "Przegląd AI", icon: MessageSquareText },
+  { key: "review", label: "Przeglad AI", icon: MessageSquareText },
   { key: "explore", label: "Eksploracja", icon: Map },
 ]
 
-const STEP_ORDER: WizardStep[] = ["upload", "configure", "processing", "review", "explore"]
+const CLASSIFICATION_STEPS: StepDef[] = [
+  { key: "upload", label: "Dane", icon: Upload },
+  { key: "categories", label: "Kategorie", icon: FolderOpen },
+  { key: "training", label: "Trening", icon: Brain },
+  { key: "classification-results", label: "Wyniki", icon: BarChart3 },
+]
 
-function getStepIndex(step: WizardStep) {
-  // Dashboard is not part of the indicator; treat it as before upload
-  if (step === "dashboard") return -1
-  return STEP_ORDER.indexOf(step)
+const FULL_STEPS: StepDef[] = [
+  { key: "upload", label: "Dane", icon: Upload },
+  { key: "configure", label: "Discovery", icon: Settings2 },
+  { key: "processing", label: "Analiza", icon: Cpu },
+  { key: "review", label: "Przeglad", icon: MessageSquareText },
+  { key: "explore", label: "Eksploracja", icon: Map },
+  { key: "categories", label: "Kategorie", icon: FolderOpen },
+  { key: "training", label: "Trening", icon: Brain },
+  { key: "classification-results", label: "Wyniki", icon: BarChart3 },
+]
+
+const BATCH_STEPS: StepDef[] = [
+  { key: "upload", label: "Dane", icon: Upload },
+  { key: "classification-results", label: "Wyniki", icon: BarChart3 },
+]
+
+function getSteps(wizardPath: WizardPath): StepDef[] {
+  switch (wizardPath) {
+    case "classify-only":
+      return CLASSIFICATION_STEPS
+    case "batch":
+      return BATCH_STEPS
+    case "full":
+    default:
+      return FULL_STEPS
+  }
 }
 
 interface StepIndicatorProps {
   currentStep: WizardStep
+  wizardPath?: WizardPath
 }
 
-export function StepIndicator({ currentStep }: StepIndicatorProps) {
-  const currentIndex = getStepIndex(currentStep)
+export function StepIndicator({ currentStep, wizardPath = "full" }: StepIndicatorProps) {
+  const steps = getSteps(wizardPath)
+  const currentIndex = steps.findIndex((s) => s.key === currentStep)
 
   return (
     <nav aria-label="Kroki procesu" className="flex items-center gap-1">
-      {STEPS.map((step, idx) => {
+      {steps.map((step, idx) => {
         const Icon = step.icon
         const isActive = idx === currentIndex
-        const isDone = idx < currentIndex
+        const isDone = currentIndex >= 0 && idx < currentIndex
 
         return (
           <div key={step.key} className="flex items-center">
@@ -60,11 +104,11 @@ export function StepIndicator({ currentStep }: StepIndicatorProps) {
                 {step.label}
               </span>
             </div>
-            {idx < STEPS.length - 1 && (
+            {idx < steps.length - 1 && (
               <div
                 className={cn(
                   "mx-2 h-px w-4 lg:w-8 transition-colors duration-500",
-                  idx < currentIndex ? "bg-accent/40" : "bg-white/[0.06]"
+                  isDone ? "bg-accent/40" : "bg-white/[0.06]"
                 )}
               />
             )}
