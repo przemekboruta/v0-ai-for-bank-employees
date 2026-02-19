@@ -24,6 +24,8 @@ from schemas import (
     ReclassifyRequest,
     GenerateLabelsRequest,
     GenerateLabelsResponse,
+    SaveCheckpointRequest,
+    UndoRequest,
     ErrorResponse,
 )
 from services.pipeline import PipelineService
@@ -339,6 +341,8 @@ async def rename_topic(req: RenameRequest):
         jobs = JobQueueService.get_instance()
         result = await jobs.get_result(req.job_id)
         if result:
+            # Save checkpoint for undo before changing
+            await jobs.push_undo(req.job_id, result)
             # Preserve jobId and meta from existing result
             old_label = ""
             # Update topic label in result
@@ -391,6 +395,11 @@ async def merge_clusters(req: MergeRequest):
                 "message": "Need 2+ clusters.",
             },
         )
+    if req.job_id:
+        jobs = JobQueueService.get_instance()
+        current = await jobs.get_result(req.job_id)
+        if current:
+            await jobs.push_undo(req.job_id, current)
     try:
         pipeline = get_pipeline()
         docs = [d.model_dump(by_alias=True) for d in req.documents]
@@ -426,6 +435,11 @@ async def reclassify_documents(req: ReclassifyRequest):
                 "message": "Number of clusters must be at least 1.",
             },
         )
+    if req.job_id:
+        jobs = JobQueueService.get_instance()
+        current = await jobs.get_result(req.job_id)
+        if current:
+            await jobs.push_undo(req.job_id, current)
     try:
         pipeline = get_pipeline()
         docs = [d.model_dump(by_alias=True) for d in req.documents]
@@ -436,10 +450,43 @@ async def reclassify_documents(req: ReclassifyRequest):
             docs,
             tops,
             req.job_id,
+            req.generate_labels,
         )
     except Exception as e:
         logger.exception(f"Reclassify error: {e}")
         raise HTTPException(status_code=500, detail={"code": "PIPELINE_ERROR", "message": str(e)})
+
+
+# ================================================================
+# POST /cluster/save-checkpoint  (for undo; e.g. before split in Next.js)
+# ================================================================
+
+
+@router.post("/save-checkpoint", summary="Save current result to undo stack")
+async def save_checkpoint(req: SaveCheckpointRequest):
+    jobs = JobQueueService.get_instance()
+    await jobs.push_undo(req.job_id, req.result)
+    return {"ok": True, "message": "Checkpoint saved"}
+
+
+# ================================================================
+# POST /cluster/undo
+# ================================================================
+
+
+@router.post("/undo", summary="Restore previous result from undo stack")
+async def undo_cluster_operation(req: UndoRequest):
+    jobs = JobQueueService.get_instance()
+    prev = await jobs.pop_undo(req.job_id)
+    if prev is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOTHING_TO_UNDO",
+                "message": "Brak zapisanej wersji do cofnięcia.",
+            },
+        )
+    return prev
 
 
 # ================================================================

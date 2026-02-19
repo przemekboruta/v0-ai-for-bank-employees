@@ -406,6 +406,7 @@ class PipelineService:
         documents: list[dict],
         topics: list[dict],
         job_id: str | None = None,
+        generate_labels: bool = True,
     ) -> dict:
         from_set = set(from_ids)
 
@@ -500,12 +501,29 @@ class PipelineService:
             except Exception as e:
                 logger.warning(f"Failed to recalculate 2D coords after reclassify: {e}")
 
-        # Build new topics with LLM labeling
+        # Build new topics; use LLM labeling only when generate_labels is True
         new_topics = []
         all_documents = other_docs + docs_to_reclassify
 
-        # Get texts for new clusters
-        if job_id:
+        def make_default_topic(i: int, new_id: int, cluster_docs: list[dict]) -> dict:
+            cx = sum(d["x"] for d in cluster_docs) / len(cluster_docs)
+            cy = sum(d["y"] for d in cluster_docs) / len(cluster_docs)
+            coh = round(coherence_scores.get(new_id, 0.5), 3)
+            return {
+                "id": new_id,
+                "label": f"Klaster {new_id}",
+                "description": f"Nowy klaster {i+1}",
+                "documentCount": len(cluster_docs),
+                "sampleTexts": [d.get("text", "") for d in cluster_docs[:5]],
+                "color": CLUSTER_COLORS[new_id % len(CLUSTER_COLORS)],
+                "centroidX": round(cx, 2),
+                "centroidY": round(cy, 2),
+                "coherenceScore": coh,
+                "keywords": [],
+            }
+
+        use_llm_success = False
+        if job_id and generate_labels:
             try:
                 texts = await self.jobs.get_texts(job_id)
                 all_embeddings = await self.jobs.get_cached_embeddings(job_id)
@@ -518,7 +536,6 @@ class PipelineService:
                         if not cluster_docs:
                             continue
 
-                        # Get texts for this cluster
                         cluster_texts = []
                         cluster_indices = []
                         for doc in cluster_docs:
@@ -530,17 +547,12 @@ class PipelineService:
                         if not cluster_texts:
                             continue
 
-                        # Calculate centroid
                         cx = sum(d["x"] for d in cluster_docs) / len(cluster_docs)
                         cy = sum(d["y"] for d in cluster_docs) / len(cluster_docs)
-
-                        # Extract keywords
                         keywords = self.clustering.extract_keywords(cluster_texts)
 
-                        # Get sample texts - use representative samples if embeddings available
                         if cluster_indices and all_embeddings is not None and len(cluster_indices) > 0:
                             try:
-                                # Create temporary labels array for this cluster
                                 temp_labels = np.full(len(documents), -1)
                                 for idx in cluster_indices:
                                     temp_labels[idx] = new_id
@@ -554,7 +566,6 @@ class PipelineService:
                             samples = cluster_texts[:5]
 
                         coherence = round(coherence_scores.get(new_id, 0.5), 3)
-                        # Use LLM to generate label
                         labeled_topic = await self.llm.label_cluster(
                             cluster_id=new_id,
                             doc_count=len(cluster_docs),
@@ -577,53 +588,20 @@ class PipelineService:
                                 "keywords": keywords,
                             }
                         )
+                        use_llm_success = True
             except Exception as e:
                 logger.warning(f"Failed to use LLM for labeling new topics: {e}")
-                # Fallback: create topics without LLM labels
                 for i, new_id in enumerate(new_ids):
                     cluster_docs = [d for d in docs_to_reclassify if d.get("clusterId") == new_id]
                     if not cluster_docs:
                         continue
-                    cx = sum(d["x"] for d in cluster_docs) / len(cluster_docs)
-                    cy = sum(d["y"] for d in cluster_docs) / len(cluster_docs)
-                    coh = round(coherence_scores.get(new_id, 0.5), 3)
-                    new_topics.append(
-                        {
-                            "id": new_id,
-                            "label": f"Klaster {new_id}",
-                            "description": f"Nowy klaster {i+1}",
-                            "documentCount": len(cluster_docs),
-                            "sampleTexts": [d["text"] for d in cluster_docs[:5]],
-                            "color": CLUSTER_COLORS[new_id % len(CLUSTER_COLORS)],
-                            "centroidX": round(cx, 2),
-                            "centroidY": round(cy, 2),
-                            "coherenceScore": coh,
-                            "keywords": [],
-                        }
-                    )
+                    new_topics.append(make_default_topic(i, new_id, cluster_docs))
         else:
-            # Fallback: create topics without LLM labels (no job_id or no embeddings)
             for i, new_id in enumerate(new_ids):
                 cluster_docs = [d for d in docs_to_reclassify if d.get("clusterId") == new_id]
                 if not cluster_docs:
                     continue
-                cx = sum(d["x"] for d in cluster_docs) / len(cluster_docs)
-                cy = sum(d["y"] for d in cluster_docs) / len(cluster_docs)
-                coh = round(coherence_scores.get(new_id, 0.5), 3)
-                new_topics.append(
-                    {
-                        "id": new_id,
-                        "label": f"Klaster {new_id}",
-                        "description": f"Nowy klaster {i+1}",
-                        "documentCount": len(cluster_docs),
-                        "sampleTexts": [d["text"] for d in cluster_docs[:5]],
-                        "color": CLUSTER_COLORS[new_id % len(CLUSTER_COLORS)],
-                        "centroidX": round(cx, 2),
-                        "centroidY": round(cy, 2),
-                        "coherenceScore": coh,
-                        "keywords": [],
-                    }
-                )
+                new_topics.append(make_default_topic(i, new_id, cluster_docs))
 
         final_topics = sorted(remaining_topics + new_topics, key=lambda t: t["id"])
         noise = sum(1 for d in all_documents if d.get("clusterId") == -1)
@@ -632,6 +610,7 @@ class PipelineService:
             "documents": all_documents,
             "topics": final_topics,
             "llmSuggestions": [],
+            "labelsGenerated": use_llm_success,
             "totalDocuments": len(all_documents),
             "noise": noise,
             "reclassifyInfo": {

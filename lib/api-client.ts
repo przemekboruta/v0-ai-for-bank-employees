@@ -271,12 +271,62 @@ export async function reclassifyDocuments(
   numClusters: number,
   documents: DocumentItem[],
   topics: ClusterTopic[],
-  jobId?: string
+  jobId?: string,
+  generateLabels: boolean = true
 ): Promise<ReclassifyResponse> {
   return apiRequest<ReclassifyResponse>("/api/cluster/reclassify", {
     method: "POST",
-    body: JSON.stringify({ fromClusterIds, numClusters, documents, topics, jobId }),
+    body: JSON.stringify({
+      fromClusterIds,
+      numClusters,
+      documents,
+      topics,
+      jobId,
+      generateLabels,
+    }),
   })
+}
+
+// ===== Split cluster =====
+
+interface SplitResponse extends ClusteringResult {
+  splitInfo: {
+    originalClusterId: number
+    newClusterIds: number[]
+    numSubclusters: number
+    documentsAffected: number
+  }
+}
+
+export async function splitCluster(
+  clusterId: number,
+  numSubclusters: number,
+  documents: DocumentItem[],
+  topics: ClusterTopic[],
+  jobId?: string
+): Promise<SplitResponse | null> {
+  return apiRequest<SplitResponse>("/api/cluster/split", {
+    method: "POST",
+    body: JSON.stringify({ clusterId, numSubclusters, documents, topics, jobId }),
+  })
+}
+
+// ===== Undo (restore previous result from Redis when backend available) =====
+
+/**
+ * Undo last cluster operation (merge/split/reclassify/rename).
+ * Returns previous result if backend had it in undo stack, null otherwise.
+ */
+export async function undoClusterOperation(jobId: string): Promise<ClusteringResult | null> {
+  try {
+    const data = await apiRequest<ClusteringResult>("/api/cluster/undo", {
+      method: "POST",
+      body: JSON.stringify({ jobId }),
+    })
+    return data ?? null
+  } catch {
+    return null
+  }
 }
 
 // ===== Export =====

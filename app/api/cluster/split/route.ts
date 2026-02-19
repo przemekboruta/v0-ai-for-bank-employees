@@ -17,19 +17,35 @@ import { CLUSTER_COLORS } from "@/lib/clustering-types"
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { clusterId, numSubclusters = 2, documents, topics } = body as {
+    const { clusterId, numSubclusters = 2, documents, topics, jobId } = body as {
       clusterId: number
       numSubclusters?: number
       documents: DocumentItem[]
       topics: ClusterTopic[]
+      jobId?: string
     }
 
-    if (isPythonBackendEnabled()) {
-      return proxyToBackend("/api/cluster/split", {
-        method: "POST",
-        body: JSON.stringify(body),
-      })
+    // Save checkpoint for undo (Redis) when backend is enabled
+    if (jobId && isPythonBackendEnabled()) {
+      const resultToSave = {
+        documents,
+        topics,
+        jobId,
+        totalDocuments: documents.length,
+        noise: documents.filter((d: DocumentItem) => d.clusterId === -1).length,
+        llmSuggestions: (body as { llmSuggestions?: unknown[] }).llmSuggestions ?? [],
+      }
+      try {
+        await proxyToBackend("/cluster/save-checkpoint", {
+          method: "POST",
+          body: JSON.stringify({ jobId, result: resultToSave }),
+        })
+      } catch {
+        // non-blocking; continue with split
+      }
     }
+
+    // Split is always done in Next.js (Python backend has no split endpoint)
 
     if (clusterId === undefined || clusterId === null) {
       return NextResponse.json(

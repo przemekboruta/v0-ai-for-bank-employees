@@ -218,6 +218,32 @@ class JobQueueService:
         await r.expire(self._key("job", job_id, "result"), RESULT_TTL)
         logger.info(f"Job {job_id} result updated")
 
+    # ---- Undo stack (max 20 entries per job) ----
+
+    UNDO_STACK_MAX = 20
+
+    async def push_undo(self, job_id: str, result: dict) -> None:
+        """Save current result to undo stack (call before merge/split/reclassify/rename)."""
+        r = await self._get_redis()
+        key = self._key("job", job_id, "undo")
+        payload = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
+        await r.lpush(key, payload)
+        await r.ltrim(key, 0, self.UNDO_STACK_MAX - 1)
+        await r.expire(key, RESULT_TTL)
+        logger.info(f"Job {job_id} undo checkpoint saved")
+
+    async def pop_undo(self, job_id: str) -> dict | None:
+        """Restore previous result from undo stack. Returns restored result or None."""
+        r = await self._get_redis()
+        key = self._key("job", job_id, "undo")
+        raw = await r.lpop(key)
+        if raw is None:
+            return None
+        prev = json.loads(raw.decode("utf-8"))
+        await self.update_result(job_id, prev)
+        logger.info(f"Job {job_id} undone, result restored")
+        return prev
+
     async def get_texts(self, job_id: str) -> list[str] | None:
         """Get stored texts for a job."""
         r = await self._get_redis()
@@ -239,6 +265,7 @@ class JobQueueService:
         pipe = r.pipeline()
         pipe.delete(self._key("job", job_id))
         pipe.delete(self._key("job", job_id, "result"))
+        pipe.delete(self._key("job", job_id, "undo"))
         pipe.delete(self._key("texts", job_id))
         pipe.delete(self._key("embeddings", job_id))
         pipe.srem(self._key("active_jobs"), job_id)

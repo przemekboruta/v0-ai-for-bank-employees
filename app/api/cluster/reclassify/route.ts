@@ -16,18 +16,19 @@ import type {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { fromClusterIds, numClusters, documents, topics, jobId } = body as {
+    const { fromClusterIds, numClusters, documents, topics, jobId, generateLabels } = body as {
       fromClusterIds: number[]
       numClusters: number
       documents: DocumentItem[]
       topics: ClusterTopic[]
       jobId?: string
+      generateLabels?: boolean
     }
 
     if (isPythonBackendEnabled()) {
       return proxyToBackend("/api/cluster/reclassify", {
         method: "POST",
-        body: JSON.stringify({ fromClusterIds, numClusters, documents, topics, jobId }),
+        body: JSON.stringify({ fromClusterIds, numClusters, documents, topics, jobId, generateLabels }),
       })
     }
 

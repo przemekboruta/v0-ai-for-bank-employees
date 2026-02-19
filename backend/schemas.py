@@ -169,6 +169,7 @@ class ReclassifyRequest(BaseModel):
     documents: list[DocumentItem]
     topics: list[ClusterTopic]
     job_id: str | None = Field(None, alias="jobId")
+    generate_labels: bool = Field(True, alias="generateLabels", description="If True, generate topic labels with LLM")
 
     model_config = {"populate_by_name": True}
 
@@ -244,6 +245,20 @@ class GenerateLabelsRequest(BaseModel):
     topics: list[ClusterTopic]
     documents: list[DocumentItem]
     job_id: str | None = Field(None, alias="jobId")
+
+    model_config = {"populate_by_name": True}
+
+
+class SaveCheckpointRequest(BaseModel):
+    """Save current result to undo stack (before merge/split/reclassify)."""
+    job_id: str = Field(alias="jobId")
+    result: dict  # ClusteringResult as dict (documents, topics, jobId, etc.)
+
+    model_config = {"populate_by_name": True}
+
+
+class UndoRequest(BaseModel):
+    job_id: str = Field(alias="jobId")
 
     model_config = {"populate_by_name": True}
 
